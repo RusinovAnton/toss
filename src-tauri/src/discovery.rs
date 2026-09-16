@@ -160,6 +160,12 @@ impl Registry {
         devices.len() != before
     }
 
+    /// Looks a device up by its fingerprint, which is its id.
+    pub fn find(&self, fingerprint: &str) -> Option<Device> {
+        let devices = self.devices.lock().expect("registry poisoned");
+        devices.get(fingerprint).cloned()
+    }
+
     /// All known devices, ordered so the UI does not reshuffle on every event.
     pub fn list(&self) -> Vec<Device> {
         let devices = self.devices.lock().expect("registry poisoned");

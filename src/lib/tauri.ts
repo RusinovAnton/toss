@@ -88,6 +88,35 @@ export function respondToRequest(
   return invoke("respond_to_request", { sessionId, acceptedFileIds });
 }
 
+export interface SendSummary {
+  sessionId: string;
+  filesSent: number;
+  bytesSent: number;
+}
+
+/** `code` is stable: declined, busy, pin-required, cancelled, connection-lost, ... */
+export interface SendError {
+  code: string;
+  message: string;
+}
+
+/**
+ * Sends files or folders to a discovered device. Resolves when every accepted
+ * file has been uploaded. A `pin-required` error means the peer wants a PIN:
+ * ask the user and call again with it.
+ */
+export function sendFiles(
+  deviceId: string,
+  paths: string[],
+  pin?: string,
+): Promise<SendSummary> {
+  return invoke<SendSummary>("send_files", { deviceId, paths, pin: pin ?? null });
+}
+
+export function cancelSend(sessionId: string): Promise<void> {
+  return invoke("cancel_send", { sessionId });
+}
+
 export function getSettings(): Promise<Settings> {
   return invoke<Settings>("get_settings");
 }

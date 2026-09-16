@@ -7,6 +7,7 @@ pub mod discovery;
 pub mod files;
 pub mod identity;
 pub mod protocol;
+pub mod send;
 pub mod server;
 pub mod session;
 pub mod settings;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub identity: Mutex<identity::Identity>,
     pub discovery: Arc<discovery::Discovery>,
     pub sessions: Arc<session::SessionManager>,
+    pub sender: Arc<send::SendManager>,
     pub settings: Arc<Mutex<settings::Settings>>,
     pub config_dir: PathBuf,
 }
@@ -77,6 +79,49 @@ fn set_settings(
     let mut current = state.settings.lock().map_err(|e| e.to_string())?;
     *current = settings;
     Ok(current.clone())
+}
+
+/// Sends files or folders to a discovered device.
+///
+/// Resolves once every accepted file has been uploaded. A `pin-required`
+/// error means the peer wants a PIN: ask the user and call again with it.
+#[tauri::command]
+async fn send_files(
+    state: tauri::State<'_, AppState>,
+    device_id: String,
+    paths: Vec<String>,
+    pin: Option<String>,
+) -> Result<send::SendSummary, send::SendErrorPayload> {
+    let device = state.discovery.registry.find(&device_id).ok_or_else(|| {
+        send::SendErrorPayload {
+            code: "unknown-device".into(),
+            message: "That device is no longer around".into(),
+        }
+    })?;
+    let target = send::Target {
+        ip: device.ip,
+        port: device.port,
+        protocol: device.protocol,
+    };
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    let sender = Arc::clone(&state.sender);
+    sender
+        .send(target, &paths, pin)
+        .await
+        .map_err(send::SendErrorPayload::from)
+}
+
+/// Stops an in-flight send and tells the peer to drop the session.
+#[tauri::command]
+async fn cancel_send(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<(), send::SendErrorPayload> {
+    let sender = Arc::clone(&state.sender);
+    sender
+        .cancel(&session_id)
+        .await
+        .map_err(send::SendErrorPayload::from)
 }
 
 /// Where received files are written. Not configurable in v1.
@@ -134,6 +179,18 @@ pub fn run() {
                 register_peer: Arc::new(move |info, ip| peers.register_peer(info, ip)),
             });
 
+            let handle = app.handle().clone();
+            let sender = Arc::new(send::SendManager::new(
+                identity.to_device_info(),
+                &identity.certificate_pem,
+                &identity.private_key_pem,
+                Arc::new(move |event, payload| {
+                    if let Err(e) = handle.emit(event, payload) {
+                        eprintln!("failed to emit {event}: {e}");
+                    }
+                }),
+            )?);
+
             let cert = identity.certificate_pem.clone();
             let key = identity.private_key_pem.clone();
             tauri::async_runtime::spawn(async move {
@@ -148,6 +205,7 @@ pub fn run() {
                 identity: Mutex::new(identity),
                 discovery,
                 sessions,
+                sender,
                 settings,
                 config_dir,
             });
@@ -158,6 +216,8 @@ pub fn run() {
             list_devices,
             rescan,
             respond_to_request,
+            send_files,
+            cancel_send,
             get_settings,
             set_settings,
             download_dir

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { formatBytes } from "./lib/format";
 import {
+  cancelSend,
   getIdentity,
   listDevices,
   onDevicesChanged,
@@ -9,6 +10,7 @@ import {
   onTransferProgress,
   rescan,
   respondToRequest,
+  sendFiles,
   type Device,
   type IdentityInfo,
   type IncomingRequest,
@@ -23,6 +25,9 @@ export default function App() {
   const [request, setRequest] = useState<IncomingRequest | null>(null);
   const [progress, setProgress] = useState<TransferProgress | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [paths, setPaths] = useState("");
+  const [sendingTo, setSendingTo] = useState<string | null>(null);
+  const [session, setSession] = useState<string | null>(null);
 
   useEffect(() => {
     getIdentity().then(setIdentity).catch(console.error);
@@ -33,7 +38,10 @@ export default function App() {
         setRequest(incoming);
         setStatus(null);
       }),
-      onTransferProgress(setProgress),
+      onTransferProgress((update) => {
+        setProgress(update);
+        if (update.direction === "send") setSession(update.sessionId);
+      }),
       onSessionFinished((finished) => {
         setRequest(null);
         setProgress(null);
@@ -59,6 +67,47 @@ export default function App() {
       setDevices(await rescan());
     } finally {
       setScanning(false);
+    }
+  }
+
+  /// Sends whatever is typed in the path box. Retries once with a PIN if the
+  /// peer asks for one, which is what the plan calls for.
+  async function send(deviceId: string) {
+    const list = paths
+      .split("\n")
+      .map((path) => path.trim())
+      .filter(Boolean);
+    if (list.length === 0) {
+      setStatus("Type a path to send");
+      return;
+    }
+    setSendingTo(deviceId);
+    setStatus(null);
+    try {
+      await sendFiles(deviceId, list);
+      setStatus("Sent");
+    } catch (error) {
+      const failure = error as { code?: string; message?: string };
+      if (failure.code === "pin-required") {
+        const pin = window.prompt("That device asks for a PIN");
+        if (pin) {
+          try {
+            await sendFiles(deviceId, list, pin);
+            setStatus("Sent");
+            return;
+          } catch (retry) {
+            setStatus((retry as { message?: string }).message ?? "Failed");
+            return;
+          } finally {
+            setSendingTo(null);
+            setSession(null);
+          }
+        }
+      }
+      setStatus(failure.message ?? "Failed");
+    } finally {
+      setSendingTo(null);
+      setSession(null);
     }
   }
 
@@ -91,18 +140,41 @@ export default function App() {
         {devices.map((device) => (
           <li
             key={device.fingerprint}
-            className="flex justify-between rounded-lg bg-black/5 px-3 py-2 dark:bg-white/5"
+            className="flex items-center justify-between gap-2 rounded-lg bg-black/5 px-3 py-2 dark:bg-white/5"
           >
-            <span>{device.alias}</span>
-            <span className="opacity-50">
+            <span className="truncate">{device.alias}</span>
+            <span className="truncate opacity-50">
               {device.deviceModel ?? device.deviceType} · {device.ip}
             </span>
+            <button
+              onClick={() => send(device.fingerprint)}
+              disabled={sendingTo !== null}
+              className="shrink-0 rounded-full border border-current/20 px-3 py-0.5 text-xs disabled:opacity-40"
+            >
+              {sendingTo === device.fingerprint ? "Sending…" : "Send"}
+            </button>
           </li>
         ))}
         {devices.length === 0 && (
           <li className="text-center opacity-40">No devices yet</li>
         )}
       </ul>
+
+      <textarea
+        value={paths}
+        onChange={(event) => setPaths(event.target.value)}
+        placeholder="One path per line (Phase 5 replaces this with drag and drop)"
+        className="h-16 w-full rounded-lg bg-black/5 p-2 text-xs dark:bg-white/5"
+      />
+
+      {session && (
+        <button
+          onClick={() => cancelSend(session).catch(console.error)}
+          className="rounded-full border border-current/20 px-3 py-0.5 text-xs"
+        >
+          Cancel send
+        </button>
+      )}
 
       {progress && (
         <p className="text-xs opacity-60">

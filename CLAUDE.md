@@ -41,10 +41,13 @@ cd src-tauri && cargo test         # Rust unit tests
 - `src-tauri/src/protocol.rs` — LocalSend v2 wire types (announce, register request/response)
 - `src-tauri/src/discovery.rs` — multicast announce/listen, `/24` scan, device registry
 - `src-tauri/src/server.rs` — axum HTTPS server, the five routes, TLS listener
+- `src-tauri/src/send.rs` — folder walking, `prepare-upload` client, streaming uploads
 - `src-tauri/src/session.rs` — one-at-a-time receive session, tokens, accept/decline
 - `src-tauri/src/files.rs` — file name validation and collision suffixes
 - `src-tauri/src/settings.rs` — `settings.json` (PIN, Quick Save)
 - `src-tauri/tests/receive.rs` — the receive routes end to end over plain HTTP
+- `src-tauri/tests/send.rs` — the sender driven against our own receive router
+- `src-tauri/tests/live_send.rs` — ignored by default; sends to a real peer on the network
 - `src-tauri/tauri.conf.json` — window (480x480, min 360), identifier `dev.toss.app`
 - `src-tauri/capabilities/default.json` — permissions for the `main` window
 
@@ -72,6 +75,25 @@ cd src-tauri && cargo test         # Rust unit tests
 - Settings are cached in memory. Editing `settings.json` by hand needs an app restart;
   `set_settings` applies at once.
 
+## Send behaviour worth knowing
+
+- Folders are walked and sent as one flat list with relative paths in `fileName`
+  (`holiday/2024/cat.png`), which is how the receiver rebuilds the tree. Symlinks are skipped.
+- Uploads are sequential. The protocol allows parallel ones, but one at a time gives honest
+  progress and keeps the receiver writing one file.
+- `sha256` is left out of the offer. It is nullable, and filling it means reading every file
+  twice. The receive side still verifies it whenever a sender provides one.
+- `prepare-upload` has no request deadline, only a 5s connect timeout: the peer's user may take
+  a minute to answer. Progress events carry `direction: "send"`.
+- Cancelling flips a flag the upload stream checks between chunks, then calls the peer's
+  `/cancel`. The peer deletes its partial file.
+
+To try a real send by hand:
+
+```bash
+TOSS_TARGET=192.168.1.5:53317 TOSS_SEND=/path/to/folder cargo test --test live_send -- --ignored --nocapture
+```
+
 ## Rules
 
 - All network I/O and filesystem access in Rust. Frontend only calls Tauri
@@ -93,6 +115,12 @@ cd src-tauri && cargo test         # Rust unit tests
 | `get_settings` | — | `{ pin, quickSave }` | |
 | `set_settings` | `settings` | `Settings` | Persists and applies immediately; the server reads the live value |
 | `download_dir` | — | `string` | Where received files land. Not configurable in v1 |
+| `send_files` | `deviceId`, `paths`, `pin?` | `{ sessionId, filesSent, bytesSent }` | Resolves when every accepted file is uploaded. Folders are walked |
+| `cancel_send` | `sessionId` | — | Aborts an in-flight send and tells the peer |
+
+`send_files` rejects with `{ code, message }`. Codes: `declined`, `busy`, `pin-required`,
+`cancelled`, `connection-lost`, `no-files`, `too-many-requests`, `io-error`, `protocol-error`,
+`unknown-device`. On `pin-required` the UI asks for a PIN and calls again with it.
 
 Frontend wrappers live in `src/lib/tauri.ts`. Always call through them, never `invoke` directly in components.
 
@@ -103,7 +131,7 @@ Frontend wrappers live in `src/lib/tauri.ts`. Always call through them, never `i
 | `devices-changed` | `Device[]` | A peer appears, changes address/alias, or ages out. A pure last-seen refresh does not fire it |
 | `incoming-request` | `{ sessionId, sender, files, totalSize }` | A peer asked to send. Answer with `respond_to_request` within 60s or it is declined |
 | `transfer-progress` | `{ sessionId, fileId, fileName, bytesReceived, totalBytes, direction }` | At most every 100ms per file, plus a final one. A single-chunk file produces exactly one |
-| `session-finished` | `{ sessionId, status, savedTo?, files? }` | `status` is `completed`, `cancelled` or `declined` |
+| `session-finished` | `{ sessionId, status, savedTo?, files?, direction?, reason? }` | `status` is `completed`, `cancelled`, `declined` or `error`. Sends carry `direction: "send"` |
 
 `Device` = `{ fingerprint, alias, deviceModel, deviceType, ip, port, protocol, download, lastSeen }`.
 `fingerprint` is the stable id.
@@ -159,6 +187,6 @@ Facts verified against the protocol repo and official app source (`packages/core
 - [x] Phase 1 — Identity and certificate
 - [x] Phase 2 — Discovery
 - [x] Phase 3 — Receive
-- [ ] Phase 4 — Send
+- [x] Phase 4 — Send
 - [ ] Phase 5 — UI (radar)
 - [ ] Phase 6 — Packaging
