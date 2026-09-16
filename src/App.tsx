@@ -69,6 +69,7 @@ export default function App() {
     pin: null,
     quickSave: false,
     clipboardSync: false,
+    startAtLogin: false,
   });
   const [size, setSize] = useState(() => Math.min(window.innerWidth, window.innerHeight));
   const radarRef = useRef<HTMLElement | null>(null);

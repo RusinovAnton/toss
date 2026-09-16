@@ -104,6 +104,20 @@ export function SettingsPanel({
           <p className="mt-1 text-[10px] leading-snug" style={{ color: "var(--muted)" }}>
             Copy here, paste on a paired device.
           </p>
+
+          <label className="mt-3 flex items-center justify-between">
+            <span style={{ color: "var(--muted)" }}>Start at login</span>
+            <input
+              type="checkbox"
+              checked={settings.startAtLogin}
+              onChange={(event) =>
+                onSettings({ ...settings, startAtLogin: event.target.checked })
+              }
+            />
+          </label>
+          <p className="mt-1 text-[10px] leading-snug" style={{ color: "var(--muted)" }}>
+            Closing the window leaves Toss in the menu bar.
+          </p>
         </div>
       )}
     </>

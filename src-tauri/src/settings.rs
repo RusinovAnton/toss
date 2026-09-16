@@ -16,6 +16,8 @@ pub struct Settings {
     /// there. Off by default, because everything you copy would otherwise
     /// start leaving this machine the moment you pair with something.
     pub clipboard_sync: bool,
+    /// Start Toss when you log in, in the menu bar rather than on screen.
+    pub start_at_login: bool,
 }
 
 impl Settings {
@@ -65,6 +67,7 @@ mod tests {
         let settings = Settings::default();
         assert!(!settings.quick_save);
         assert!(!settings.clipboard_sync);
+        assert!(!settings.start_at_login);
         assert_eq!(settings.required_pin(), None);
     }
 
@@ -75,6 +78,7 @@ mod tests {
             pin: Some("123456".into()),
             quick_save: true,
             clipboard_sync: true,
+            start_at_login: true,
         };
         settings.save(&dir).unwrap();
         assert_eq!(Settings::load(&dir), settings);

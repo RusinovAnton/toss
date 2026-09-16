@@ -55,6 +55,8 @@ export interface Settings {
   quickSave: boolean;
   /** Copy here, paste on a paired device. Off by default. */
   clipboardSync: boolean;
+  /** Start with the machine, in the menu bar rather than on screen. */
+  startAtLogin: boolean;
 }
 
 export interface IncomingFile {

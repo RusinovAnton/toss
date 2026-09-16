@@ -891,6 +891,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn symlinks_inside_a_folder_are_skipped() {
         let dir = temp_dir();
         let root = dir.join("tree");

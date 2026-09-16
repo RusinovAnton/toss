@@ -12,6 +12,7 @@ pub mod send;
 pub mod server;
 pub mod session;
 pub mod tls;
+pub mod tray;
 pub mod settings;
 pub mod trust;
 pub mod window;
@@ -23,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::collections::HashSet;
 use tauri::{Emitter, Manager, WindowEvent};
+use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -163,14 +165,40 @@ fn get_settings(state: tauri::State<'_, AppState>) -> Result<settings::Settings,
 
 #[tauri::command]
 fn set_settings(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     settings: settings::Settings,
 ) -> Result<settings::Settings, String> {
     settings.save(&state.config_dir).map_err(|e| e.to_string())?;
     let mut current = state.settings.lock().map_err(|e| e.to_string())?;
     *current = settings;
-    Ok(current.clone())
+    let updated = current.clone();
+    drop(current);
+    set_login_item(&app, updated.start_at_login);
+    Ok(updated)
 }
+
+/// Brings the login item in line with the setting.
+///
+/// The two can drift: the user may remove Toss from their login items in
+/// System Settings, and the app should not quietly put it back except when
+/// asked.
+fn set_login_item(app: &tauri::AppHandle, wanted: bool) {
+    let manager = app.autolaunch();
+    let current = manager.is_enabled().unwrap_or(false);
+    if current == wanted {
+        return;
+    }
+    let result = if wanted {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    if let Err(e) = result {
+        eprintln!("could not change the login item: {e}");
+    }
+}
+
 
 /// The devices this one is paired with.
 #[tauri::command]
@@ -297,6 +325,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        // Launched at login it starts in the menu bar, not on screen.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![tray::HIDDEN_ARG]),
+        ))
         .setup(|app| {
             let config_dir = app.path().app_data_dir()?;
             let identity = identity::Identity::load_or_create(&config_dir)?;
@@ -374,6 +407,12 @@ pub fn run() {
             });
 
             let stored = window::Geometry::load(&config_dir);
+            // Read before the settings move into the managed state.
+            let login_wanted = settings
+                .lock()
+                .map(|s| s.start_at_login)
+                .unwrap_or(false);
+
             spawn_clipboard_sync(
                 app.handle().clone(),
                 Arc::clone(&clipboard),
@@ -400,7 +439,13 @@ pub fn run() {
                 }),
             });
 
+            tray::build(app.handle())?;
+            set_login_item(app.handle(), login_wanted);
+
             if let Some(main) = app.get_webview_window("main") {
+                if !tray::should_show_window(std::env::args()) {
+                    let _ = main.hide();
+                }
                 if let Some(geometry) = stored {
                     let _ = main.set_size(tauri::PhysicalSize::new(geometry.side, geometry.side));
                     let _ = main.set_position(tauri::PhysicalPosition::new(geometry.x, geometry.y));
@@ -565,7 +610,17 @@ fn watch_window(app: tauri::AppHandle, main: tauri::WebviewWindow) {
                     save_geometry(&mut geometry, &state.config_dir, false);
                 }
             }
-            WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
+            // Closing puts Toss in the menu bar rather than quitting it, so
+            // files and clipboard text still arrive. Quit lives in the tray
+            // menu.
+            WindowEvent::CloseRequested { api, .. } => {
+                if let Ok(mut geometry) = state.geometry.lock() {
+                    save_geometry(&mut geometry, &state.config_dir, true);
+                }
+                api.prevent_close();
+                let _ = window.hide();
+            }
+            WindowEvent::Destroyed => {
                 if let Ok(mut geometry) = state.geometry.lock() {
                     save_geometry(&mut geometry, &state.config_dir, true);
                 }

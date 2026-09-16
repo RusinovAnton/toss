@@ -222,13 +222,17 @@ fn route_source(destination: IpAddr, port: u16) -> Option<Ipv4Addr> {
 
 /// Binds the multicast socket and joins the group.
 ///
-/// `SO_REUSEPORT` matters: the official app may already hold port 53317 on
-/// this machine, and both processes must receive the datagrams. Loopback is
-/// left on for the same reason, which is why announces from our own
-/// fingerprint have to be filtered out.
+/// Sharing the port matters: the official app may already hold 53317 on this
+/// machine, and both processes must receive the datagrams. Loopback is left on
+/// for the same reason, which is why announces from our own fingerprint have
+/// to be filtered out.
 fn bind_multicast_socket(port: u16) -> std::io::Result<UdpSocket> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(SockProtocol::UDP))?;
     socket.set_reuse_address(true)?;
+    // Unix needs both options to let two processes share the port; on Windows
+    // `SO_REUSEADDR` already means what `SO_REUSEPORT` means here, and
+    // `set_reuse_port` does not exist.
+    #[cfg(unix)]
     socket.set_reuse_port(true)?;
     socket.set_nonblocking(true)?;
     socket.bind(&SocketAddr::from(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).into())?;

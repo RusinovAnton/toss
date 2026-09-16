@@ -101,7 +101,10 @@ pnpm dev
 
 ## Releases
 
-`.github/workflows/ci.yml` runs both test suites on macOS and Windows.
+`.github/workflows/ci.yml` runs both test suites on macOS and Windows. Keep it:
+the Windows job is the only thing that catches Unix-only code, and it caught
+two such bugs the first time it ran. The pnpm version comes from
+`packageManager` in `package.json`, so CI cannot drift from this machine.
 `.github/workflows/release.yml` builds installers for macOS (Apple silicon and
 Intel) and Windows on a `v*` tag, and leaves a **draft** release with them
 attached, so nothing goes public without a look first:
@@ -121,6 +124,14 @@ the workflow tell users what to click.
 - Windows asks about the firewall on first launch. Without the private-network
   allowance no peer can reach the receive server and the radar stays empty.
   This is in the README because users hit it.
+
+## Windows notes
+
+Two things only CI catches, because they cannot fail on a Mac:
+
+- `set_reuse_port` does not exist on Windows. It is `#[cfg(unix)]`, and
+  `SO_REUSEADDR` alone already gives the shared-port behaviour there.
+- `std::os::unix` is obviously Unix-only; the symlink test is gated to match.
 
 ## Known limitations
 
