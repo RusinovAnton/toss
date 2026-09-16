@@ -79,6 +79,7 @@ cd src-tauri && cargo test         # Rust unit tests
 - `src-tauri/src/tls.rs` — the certificate verifiers pairing rests on
 - `src-tauri/tests/paired.rs` — pairing end to end over real TLS
 - `assets/icon.svg` — the icon source; `src-tauri/icons/` is generated from it
+- `src-tauri/src/tray.rs` — the menu bar item, and closing to it rather than quitting
 - `docs/*.png` — README screenshots, captured from the dev preview
 - `src-tauri/tests/receive.rs` — the receive routes end to end over plain HTTP
 - `src-tauri/tests/send.rs` — the sender driven against our own receive router
@@ -119,8 +120,15 @@ the workflow tell users what to click.
 ## Packaging
 
 - Bundle identifier `dev.toss.app`, product name `Toss`, minimum macOS 10.15.
-- The icon source is `assets/icon.svg`: a filled blue dot with two rings on a
-  near-black squircle. It reads the same in one colour.
+- The icon source is `assets/icon.svg`: two links holding each other, each
+  holding a device, on a near-black squircle. The lower link passes in front,
+  which is what makes them read as linked rather than as two circles that
+  happen to overlap.
+- `src-tauri/icons/tray.png` is the menu bar stencil: the same two links in
+  black on transparency, without the inner dots, which turn to mush at 22pt.
+  It is marked as a template so macOS recolours it.
+- An earlier icon was a dot inside two rings. It read as a tracking beacon, so
+  it went. The scaffold's icon was Tauri's own logo and must never ship.
 - Windows asks about the firewall on first launch. Without the private-network
   allowance no peer can reach the receive server and the radar stays empty.
   This is in the README because users hit it.

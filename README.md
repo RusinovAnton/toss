@@ -28,6 +28,9 @@ see orbits around it.
 - **Receive** by answering the card that slides up: Enter accepts, Escape
   declines. Files land in Downloads with their folder structure intact and
   never overwrite anything; a second `cat.png` becomes `cat (1).png`.
+- **Close it** and Toss carries on from the menu bar, still receiving. Quit
+  lives in that menu. It can start with your machine too, straight into the
+  menu bar rather than on screen.
 - **Watch** the ring around a circle fill as the transfer runs. Green when it
   lands, red with a reason when it does not.
 - **Pair** a device you use often by right-clicking its circle. Paired devices

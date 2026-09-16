@@ -1,8 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <!-- Toss: a filled dot with two rings leaving it, the radar in miniature.
-       Blue on near-black, and it still reads as three shapes in one colour. -->
+  <!-- Toss: two links holding each other, each holding a device. The lower
+       one passes in front, which is what makes them read as linked rather
+       than as two circles that happen to overlap. -->
+  <defs>
+    <mask id="linkCut">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <circle cx="596" cy="596" r="206" fill="#000"/>
+    </mask>
+  </defs>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="#0B0F14"/>
-  <circle cx="512" cy="512" r="118" fill="#3B82F6"/>
-  <circle cx="512" cy="512" r="210" fill="none" stroke="#3B82F6" stroke-width="24"/>
-  <circle cx="512" cy="512" r="302" fill="none" stroke="#3B82F6" stroke-width="24" opacity="0.55"/>
+  <g mask="url(#linkCut)">
+    <circle cx="428" cy="428" r="162" fill="none" stroke="#3B82F6" stroke-width="52"/>
+  </g>
+  <circle cx="596" cy="596" r="162" fill="none" stroke="#22D3EE" stroke-width="52"/>
+  <circle cx="428" cy="428" r="50" fill="#3B82F6"/>
+  <circle cx="596" cy="596" r="50" fill="#22D3EE"/>
 </svg>
