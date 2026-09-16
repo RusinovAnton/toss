@@ -9,6 +9,7 @@
 //! stable across restarts. Peers remember us by fingerprint, so regenerating
 //! it would make us look like a new device.
 
+use crate::protocol::{DeviceInfo, DeviceType, ProtocolType, DEFAULT_PORT, PROTOCOL_VERSION};
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::CertificateDer;
@@ -17,10 +18,6 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_PORT: u16 = 53317;
-/// Protocol version we announce. 2.2 = 2.1 + `422` on sha256 mismatch (Phase 3 must honour it).
-pub const PROTOCOL_VERSION: &str = "2.2";
-pub const DEVICE_TYPE: &str = "desktop";
 const FILE_NAME: &str = "identity.json";
 const CERT_COMMON_NAME: &str = "Toss";
 
@@ -78,7 +75,7 @@ pub struct IdentityInfo {
     pub alias: String,
     pub fingerprint: String,
     pub device_model: String,
-    pub device_type: String,
+    pub device_type: DeviceType,
     pub port: u16,
 }
 
@@ -163,8 +160,25 @@ impl Identity {
             alias: self.alias.clone(),
             fingerprint: self.fingerprint.clone(),
             device_model: device_model().to_string(),
-            device_type: DEVICE_TYPE.to_string(),
+            device_type: DeviceType::Desktop,
             port: DEFAULT_PORT,
+        }
+    }
+
+    /// This device as the protocol's device object, for announces and
+    /// `/register` requests.
+    pub fn to_device_info(&self) -> DeviceInfo {
+        DeviceInfo {
+            alias: self.alias.clone(),
+            version: PROTOCOL_VERSION.to_string(),
+            device_model: Some(device_model().to_string()),
+            device_type: Some(DeviceType::Desktop),
+            fingerprint: self.fingerprint.clone(),
+            port: DEFAULT_PORT,
+            // We always run the HTTPS server (Phase 3). The download API is not
+            // implemented, so `download` stays false.
+            protocol: ProtocolType::Https,
+            download: false,
         }
     }
 }
@@ -307,5 +321,17 @@ mod tests {
         assert!(json["deviceModel"].is_string());
         assert_eq!(json["fingerprint"], id.fingerprint);
         assert!(json.get("privateKeyPem").is_none());
+    }
+
+    #[test]
+    fn device_info_matches_the_protocol_object() {
+        let id = Identity::generate().unwrap();
+        let json = serde_json::to_value(id.to_device_info()).unwrap();
+        assert_eq!(json["version"], "2.2");
+        assert_eq!(json["protocol"], "https");
+        assert_eq!(json["deviceType"], "desktop");
+        assert_eq!(json["port"], 53317);
+        assert_eq!(json["download"], false);
+        assert_eq!(json["fingerprint"], id.fingerprint);
     }
 }
