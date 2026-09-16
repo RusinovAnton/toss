@@ -33,6 +33,19 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "licenseFile": "../LICENSE",
+    "shortDescription": "LocalSend-compatible file transfer, shaped like a radar",
+    "longDescription": "Toss sends files and folders to other devices on your local network. It speaks the LocalSend protocol, so it interoperates with the official LocalSend app. No account, no cloud, no telemetry.",
+    "category": "Utility",
+    "copyright": "Copyright (c) 2026 Toss contributors",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "wix": {
+        "language": "en-US"
+      }
+    }
   }
 }

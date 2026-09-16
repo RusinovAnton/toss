@@ -18,7 +18,32 @@ Full spec and phase plan: see `PLAN.md` (source of truth for scope).
 ```bash
 pnpm install
 pnpm tauri dev        # dev window, hot reload
-pnpm tauri build      # .dmg / .msi
+pnpm tauri build      # bundles into src-tauri/target/release/bundle/
+```
+
+`pnpm tauri build` only produces the formats of the machine it runs on: `.dmg`
+and `.app` on macOS, `.msi` and the NSIS installer on Windows. There is no
+cross-compiling, so Windows bundles need a Windows machine or CI runner.
+
+**The `.dmg` step needs `CI=true` here.** `bundle_dmg.sh` drives Finder over
+AppleScript to lay the window out, which fails without automation permission
+and takes the whole build down with it:
+
+```bash
+CI=true pnpm tauri build
+```
+
+`CI=true` skips the Finder pass. The image is identical apart from the window
+layout when someone opens it. If a build dies at "Running bundle_dmg.sh", it
+also leaves a half-built image mounted under `/Volumes/dmg.*` and a stray
+`rw.*.dmg` in the bundle directory; `hdiutil detach` it before retrying, or a
+second copy of the app keeps running and holds port 53317.
+
+The icon comes from `assets/icon.svg`. After changing it, re-render the 1024px
+PNG and regenerate the set:
+
+```bash
+pnpm tauri icon assets/icon.png
 ```
 
 Rust toolchain via rustup (`~/.cargo/bin`). If `cargo` is not on PATH:
@@ -50,11 +75,35 @@ cd src-tauri && cargo test         # Rust unit tests
 - `src-tauri/src/files.rs` — file name validation and collision suffixes
 - `src-tauri/src/settings.rs` — `settings.json` (PIN, Quick Save)
 - `src-tauri/src/window.rs` — remembered geometry and the square-window rule
+- `assets/icon.svg` — the icon source; `src-tauri/icons/` is generated from it
+- `docs/*.png` — README screenshots, captured from the dev preview
 - `src-tauri/tests/receive.rs` — the receive routes end to end over plain HTTP
 - `src-tauri/tests/send.rs` — the sender driven against our own receive router
 - `src-tauri/tests/live_send.rs` — ignored by default; sends to a real peer on the network
 - `src-tauri/tauri.conf.json` — window (480x480, min 360), identifier `dev.toss.app`
 - `src-tauri/capabilities/default.json` — permissions for the `main` window
+
+## Screenshots
+
+The README's screenshots come from the dev preview, captured with headless
+Chrome rather than a real window, because this repo is often worked on where
+native screenshots are blocked:
+
+```bash
+pnpm dev
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
+  --window-size=480,480 --screenshot=docs/radar-dark.png \
+  "http://localhost:1420/?theme=dark"
+```
+
+## Packaging
+
+- Bundle identifier `dev.toss.app`, product name `Toss`, minimum macOS 10.15.
+- The icon source is `assets/icon.svg`: a filled blue dot with two rings on a
+  near-black squircle. It reads the same in one colour.
+- Windows asks about the firewall on first launch. Without the private-network
+  allowance no peer can reach the receive server and the radar stays empty.
+  This is in the README because users hit it.
 
 ## Known limitations
 
@@ -226,4 +275,4 @@ Facts verified against the protocol repo and official app source (`packages/core
 - [x] Phase 3 — Receive
 - [x] Phase 4 — Send
 - [x] Phase 5 — UI (radar)
-- [ ] Phase 6 — Packaging
+- [x] Phase 6 — Packaging

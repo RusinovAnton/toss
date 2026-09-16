@@ -12,6 +12,13 @@ export function isPreview(): boolean {
   return import.meta.env.DEV && !isTauri();
 }
 
+/** `?theme=dark` forces the dark tokens, for design work and screenshots. */
+export function applyPreviewTheme(): void {
+  if (!isPreview()) return;
+  const theme = new URLSearchParams(window.location.search).get("theme");
+  if (theme) document.documentElement.setAttribute("data-theme", theme);
+}
+
 /** `?card`, `?saved` and `?settings` show those pieces in preview mode. */
 export function previewFlag(name: string): boolean {
   return isPreview() && new URLSearchParams(window.location.search).has(name);

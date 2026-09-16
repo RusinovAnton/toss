@@ -8,6 +8,7 @@ import { IncomingCard, SavedCard } from "./components/IncomingCard";
 import { Pulses } from "./components/Pulses";
 import { SettingsPanel } from "./components/SettingsPanel";
 import {
+  applyPreviewTheme,
   isPreview,
   previewFlag,
   PREVIEW_DEVICES,
@@ -57,6 +58,7 @@ export default function App() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [settings, setSettings] = useState<Settings>({ pin: null, quickSave: false });
   const [size, setSize] = useState(() => Math.min(window.innerWidth, window.innerHeight));
+  const radarRef = useRef<HTMLElement | null>(null);
   const [transfers, setTransfers] = useState<Record<string, Transfer>>({});
   const [incoming, setIncoming] = useState<IncomingRequest | null>(() =>
     previewFlag("card") ? PREVIEW_REQUEST : null,
@@ -119,6 +121,7 @@ export default function App() {
   // Live data and events.
   useEffect(() => {
     if (isPreview()) {
+      applyPreviewTheme();
       setIdentity(PREVIEW_IDENTITY);
       setDevices(PREVIEW_DEVICES);
       setTransfer(PREVIEW_DEVICES[1].fingerprint, { phase: "active", progress: 0.42 });
@@ -168,11 +171,17 @@ export default function App() {
     };
   }, [clearTransferLater, setTransfer]);
 
-  // The window is square, so one number describes it.
+  // Measure the radar itself rather than the window: the observer reports the
+  // real box as soon as it exists, which a resize listener does not.
   useEffect(() => {
-    const onResize = () => setSize(Math.min(window.innerWidth, window.innerHeight));
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    const element = radarRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const box = entry.contentRect;
+      setSize(Math.min(box.width, box.height));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
   }, []);
 
   // Pausing the rings while the window is in the background keeps it cheap.
@@ -287,7 +296,11 @@ export default function App() {
   }
 
   return (
-    <main className="relative h-full w-full overflow-hidden" style={{ background: "var(--bg)" }}>
+    <main
+      ref={radarRef}
+      className="relative h-full w-full overflow-hidden"
+      style={{ background: "var(--bg)" }}
+    >
       <Pulses size={size} />
 
       <CenterCircle

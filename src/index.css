@@ -23,6 +23,18 @@
   }
 }
 
+/* The same values again for `data-theme="dark"`. Plain CSS cannot share one
+   block between a media query and a selector, and this is what lets the dev
+   preview show either theme without touching the system setting. */
+:root[data-theme="dark"] {
+  --bg: #0b0f14;
+  --fg: #f5f7fa;
+  --muted: rgba(245, 247, 250, 0.62);
+  --ring: rgba(245, 247, 250, 0.22);
+  --surface: #18202a;
+  --shadow: rgba(0, 0, 0, 0.55);
+}
+
 html,
 body,
 #root {
