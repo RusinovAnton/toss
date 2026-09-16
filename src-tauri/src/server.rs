@@ -13,14 +13,16 @@
 
 use crate::files::{candidate_name, is_inside, safe_relative_path};
 use crate::protocol::{
-    read_info, DeviceInfo, FileDto, PrepareUploadRequest, PrepareUploadResponse, SharedInfo,
-    DEFAULT_PORT,
+    read_info, text_message_of, DeviceInfo, FileDto, PrepareUploadRequest, PrepareUploadResponse,
+    SharedInfo, DEFAULT_PORT,
 };
 use crate::session::{
     build_active_session, Decision, IncomingFile, Sender as PeerSender, SessionError,
     SessionManager,
 };
 use crate::settings::Settings;
+use crate::tls::{peer_fingerprint, AnyClientCert};
+use crate::trust::TrustStore;
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::StatusCode;
@@ -50,17 +52,39 @@ const MAX_NAME_ATTEMPTS: u32 = 1000;
 pub const INCOMING_REQUEST_EVENT: &str = "incoming-request";
 pub const TRANSFER_PROGRESS_EVENT: &str = "transfer-progress";
 pub const SESSION_FINISHED_EVENT: &str = "session-finished";
+/// A paired device sent text. The payload carries it for the clipboard.
+pub const TEXT_RECEIVED_EVENT: &str = "text-received";
+/// A message longer than this is refused rather than buffered.
+const MAX_MESSAGE_BYTES: u64 = 1024 * 1024;
 
 /// Emits an event to the frontend.
 pub type Emitter = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 /// Hands a peer that contacted us to discovery, so registering works both ways.
 pub type PeerSink = Arc<dyn Fn(DeviceInfo, IpAddr) + Send + Sync>;
 
+/// Who is on the other end of a connection.
+///
+/// `fingerprint` comes from the TLS handshake, not from anything the peer
+/// wrote in a request body, which is what makes it safe to base pairing on.
+/// It is `None` over plain HTTP and for peers that present no certificate.
+#[derive(Clone, Debug)]
+pub struct Peer {
+    pub addr: SocketAddr,
+    pub fingerprint: Option<String>,
+}
+
+impl Peer {
+    pub fn ip(&self) -> IpAddr {
+        self.addr.ip()
+    }
+}
+
 pub struct ServerState {
     /// This device, as sent in answers.
     pub info: SharedInfo,
     pub sessions: Arc<SessionManager>,
     pub settings: Arc<Mutex<Settings>>,
+    pub trusted: Arc<Mutex<TrustStore>>,
     pub download_dir: PathBuf,
     pub emit: Emitter,
     pub register_peer: PeerSink,
@@ -77,6 +101,17 @@ impl ServerState {
 
     fn quick_save(&self) -> bool {
         self.settings.lock().expect("settings poisoned").quick_save
+    }
+
+    /// Whether the handshake proved this is a device we have paired with.
+    fn is_paired(&self, peer: &Peer) -> bool {
+        let Some(fingerprint) = &peer.fingerprint else {
+            return false;
+        };
+        self.trusted
+            .lock()
+            .expect("trust store poisoned")
+            .is_trusted(fingerprint)
     }
 }
 
@@ -96,7 +131,7 @@ async fn info(State(state): State<Arc<ServerState>>) -> Json<DeviceInfo> {
 
 async fn register(
     State(state): State<Arc<ServerState>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<Peer>,
     Json(sender): Json<DeviceInfo>,
 ) -> Json<DeviceInfo> {
     (state.register_peer)(sender, peer.ip());
@@ -110,7 +145,7 @@ struct PinQuery {
 
 async fn prepare_upload(
     State(state): State<Arc<ServerState>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<Peer>,
     Query(query): Query<PinQuery>,
     Json(request): Json<PrepareUploadRequest>,
 ) -> Response {
@@ -124,6 +159,10 @@ async fn prepare_upload(
         // Protocol: 204 means there is nothing to transfer.
         return StatusCode::NO_CONTENT.into_response();
     }
+
+    // A single text file carrying its text in `preview` is a message, not a
+    // transfer: it belongs on the clipboard rather than in Downloads.
+    let message = text_message_of(&request.files);
 
     // Validate every name before anything else: a request carrying one bad
     // path is not a request we want to half-accept.
@@ -157,21 +196,30 @@ async fn prepare_upload(
         ip: peer.ip(),
     };
 
+    let paired = state.is_paired(&peer);
     let quick_save = state.quick_save();
     eprintln!(
-        "prepare-upload from {} ({}): {} file(s), quick save {}",
+        "prepare-upload from {} ({}): {} file(s), {}",
         request.info.alias,
         peer.ip(),
         offered.len(),
-        if quick_save { "on" } else { "off" }
+        if paired {
+            "paired device"
+        } else if quick_save {
+            "quick save on"
+        } else {
+            "asking the user"
+        }
     );
-    let decision = if quick_save {
+    // A paired device is one the user has already vouched for, proved by the
+    // certificate in the handshake, so it does not ask again.
+    let decision = if paired || quick_save {
         state.sessions.clear_pending(&session_id);
         Decision::Accept(offered.iter().map(|f| f.id.clone()).collect())
     } else {
         (state.emit)(
             INCOMING_REQUEST_EVENT,
-            incoming_request_payload(&session_id, &sender, &offered),
+            incoming_request_payload(&session_id, &sender, &offered, &peer, message.as_deref()),
         );
         match tokio::time::timeout(APPROVAL_TIMEOUT, receiver).await {
             Ok(Ok(decision)) => decision,
@@ -201,7 +249,13 @@ async fn prepare_upload(
         }
     };
 
-    let session = build_active_session(session_id.clone(), sender, &offered, &accepted);
+    let session = build_active_session(
+        session_id.clone(),
+        sender,
+        &offered,
+        &accepted,
+        message,
+    );
     let tokens = session
         .files
         .values()
@@ -230,12 +284,17 @@ fn incoming_request_payload(
     session_id: &str,
     sender: &PeerSender,
     files: &[IncomingFile],
+    peer: &Peer,
+    message: Option<&str>,
 ) -> serde_json::Value {
     json!({
         "sessionId": session_id,
         "sender": {
             "alias": sender.alias,
+            // What the sender claims. Only meaningful without encryption.
             "fingerprint": sender.fingerprint,
+            // What the handshake proved, which is what pairing uses.
+            "verifiedFingerprint": peer.fingerprint,
             "deviceModel": sender.device_model,
             "ip": sender.ip.to_string(),
         },
@@ -246,6 +305,8 @@ fn incoming_request_payload(
             "fileType": file.file_type,
         })).collect::<Vec<_>>(),
         "totalSize": files.iter().map(|f| f.size).sum::<u64>(),
+        // Present when this is a clipboard message rather than files.
+        "text": message,
     })
 }
 
@@ -259,7 +320,7 @@ struct UploadQuery {
 
 async fn upload(
     State(state): State<Arc<ServerState>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<Peer>,
     Query(query): Query<UploadQuery>,
     body: Body,
 ) -> Response {
@@ -278,6 +339,40 @@ async fn upload(
             Err(SessionError::Busy) => return StatusCode::CONFLICT.into_response(),
             Err(SessionError::Rejected) => return StatusCode::FORBIDDEN.into_response(),
         };
+
+    // A message was already delivered in the offer; its body is read and
+    // dropped so the sender sees a normal transfer.
+    if let Some(text) = state.sessions.active_message(&session_id) {
+        return match drain_message_body(body, &cancelled).await {
+            Ok(()) => {
+                let sender = state.sessions.active_sender(&session_id);
+                state
+                    .sessions
+                    .complete_file(&session_id, &file.id, PathBuf::new());
+                (state.emit)(
+                    TEXT_RECEIVED_EVENT,
+                    json!({
+                        "sessionId": session_id,
+                        "peer": sender.as_ref().map(|s| s.fingerprint.clone()),
+                        "alias": sender.map(|s| s.alias),
+                        "text": text,
+                    }),
+                );
+                (state.emit)(
+                    SESSION_FINISHED_EVENT,
+                    json!({
+                        "sessionId": session_id,
+                        "status": "completed",
+                        "direction": "receive",
+                        "kind": "text",
+                    }),
+                );
+                StatusCode::OK.into_response()
+            }
+            Err(ReceiveError::Cancelled) => StatusCode::CONFLICT.into_response(),
+            Err(_) => StatusCode::BAD_REQUEST.into_response(),
+        };
+    }
 
     match receive_file(&state, &session_id, &file, body, &cancelled).await {
         Ok(saved) => {
@@ -304,6 +399,26 @@ async fn upload(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+/// Reads a message body and throws it away, refusing anything oversized.
+async fn drain_message_body(
+    body: Body,
+    cancelled: &Arc<AtomicBool>,
+) -> Result<(), ReceiveError> {
+    let mut stream = body.into_data_stream();
+    let mut read: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(ReceiveError::Cancelled);
+        }
+        let chunk = chunk.map_err(|e| ReceiveError::Io(std::io::Error::other(e)))?;
+        read += chunk.len() as u64;
+        if read > MAX_MESSAGE_BYTES {
+            return Err(ReceiveError::Io(std::io::Error::other("message too large")));
+        }
+    }
+    Ok(())
 }
 
 enum ReceiveError {
@@ -474,12 +589,12 @@ async fn cancel(State(state): State<Arc<ServerState>>, Query(query): Query<Cance
 /// so one peer stalling mid-handshake cannot hold up everyone else.
 pub struct TlsListener {
     local_addr: SocketAddr,
-    incoming: tokio::sync::mpsc::Receiver<(tokio_rustls::server::TlsStream<TcpStream>, SocketAddr)>,
+    incoming: tokio::sync::mpsc::Receiver<(tokio_rustls::server::TlsStream<TcpStream>, Peer)>,
 }
 
 impl axum::serve::Listener for TlsListener {
     type Io = tokio_rustls::server::TlsStream<TcpStream>;
-    type Addr = SocketAddr;
+    type Addr = Peer;
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         match self.incoming.recv().await {
@@ -492,7 +607,62 @@ impl axum::serve::Listener for TlsListener {
     }
 
     fn local_addr(&self) -> std::io::Result<Self::Addr> {
-        Ok(self.local_addr)
+        Ok(Peer {
+            addr: self.local_addr,
+            fingerprint: None,
+        })
+    }
+}
+
+/// An unencrypted listener, for the protocol's HTTP mode and for tests.
+///
+/// It reports no fingerprint, ever. Without TLS there is no certificate to
+/// identify a peer by, so nothing here can be treated as paired.
+pub struct PlainListener {
+    inner: TcpListener,
+}
+
+impl PlainListener {
+    pub async fn bind(addr: SocketAddr) -> std::io::Result<Self> {
+        Ok(PlainListener {
+            inner: TcpListener::bind(addr).await?,
+        })
+    }
+
+    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.inner.local_addr()
+    }
+}
+
+impl axum::serve::Listener for PlainListener {
+    type Io = TcpStream;
+    type Addr = Peer;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            match self.inner.accept().await {
+                Ok((stream, addr)) => {
+                    return (
+                        stream,
+                        Peer {
+                            addr,
+                            fingerprint: None,
+                        },
+                    )
+                }
+                Err(e) => {
+                    eprintln!("accept failed: {e}");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        Ok(Peer {
+            addr: self.inner.local_addr()?,
+            fingerprint: None,
+        })
     }
 }
 
@@ -508,7 +678,7 @@ pub async fn bind_tls(
 
     // Installing the provider twice is not an error we care about; another
     // part of the app (or a test) may have done it already.
-    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+    crate::tls::install_provider();
 
     let certs = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
         .collect::<Result<Vec<_>, _>>()
@@ -517,9 +687,10 @@ pub async fn bind_tls(
         .map_err(|e| format!("private key is not valid PEM: {e:?}"))?;
 
     let mut config = ServerConfig::builder()
-        // Peers are identified by certificate fingerprint, not by a CA, so
-        // asking for a client certificate would buy nothing here.
-        .with_no_client_auth()
+        // Every client is asked for a certificate so its fingerprint can be
+        // read off the handshake; offering none is still allowed. See
+        // `crate::tls` for why this is not a hole.
+        .with_client_cert_verifier(Arc::new(AnyClientCert::new()))
         .with_single_cert(certs, key)
         .map_err(|e| format!("TLS configuration rejected: {e}"))?;
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
@@ -546,7 +717,16 @@ pub async fn bind_tls(
             tauri::async_runtime::spawn(async move {
                 match acceptor.accept(stream).await {
                     Ok(tls) => {
-                        let _ = tx.send((tls, peer)).await;
+                        let fingerprint = peer_fingerprint(tls.get_ref().1.peer_certificates());
+                        let _ = tx
+                            .send((
+                                tls,
+                                Peer {
+                                    addr: peer,
+                                    fingerprint,
+                                },
+                            ))
+                            .await;
                     }
                     Err(e) => eprintln!("TLS handshake with {peer} failed: {e}"),
                 }
@@ -560,22 +740,30 @@ pub async fn bind_tls(
     })
 }
 
+/// Serves `app` on a listener that knows who its peers are.
+///
+/// The `tap_io` call is the hook axum offers for custom listeners: its
+/// blanket impl is what lets handlers extract [`Peer`]. Everything that
+/// serves this router goes through here so nobody has to remember that.
+pub async fn serve<L>(listener: L, app: Router) -> std::io::Result<()>
+where
+    L: axum::serve::Listener<Addr = Peer>,
+{
+    use axum::serve::ListenerExt;
+    axum::serve(
+        listener.tap_io(|_| {}),
+        app.into_make_service_with_connect_info::<Peer>(),
+    )
+    .await
+}
+
 /// Starts the HTTPS server. Returns once it is listening; it then runs until
 /// the process ends.
 pub async fn start(state: Arc<ServerState>, cert_pem: &str, key_pem: &str) -> Result<(), String> {
-    use axum::serve::ListenerExt;
-
-    // `tap_io` is the hook axum offers for custom listeners: its blanket impl
-    // is what lets handlers extract the peer address of a TLS connection.
-    let listener = bind_tls(DEFAULT_PORT, cert_pem, key_pem).await?.tap_io(|_| {});
+    let listener = bind_tls(DEFAULT_PORT, cert_pem, key_pem).await?;
     let app = router(state);
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        {
+        if let Err(e) = serve(listener, app).await {
             eprintln!("HTTPS server stopped: {e}");
         }
     });

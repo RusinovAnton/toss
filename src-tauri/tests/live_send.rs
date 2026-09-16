@@ -35,6 +35,7 @@ async fn send_to_a_real_peer() {
                 println!("event {event}: {payload}");
             }
         }),
+        Arc::new(Mutex::new(toss_lib::trust::TrustStore::default())),
     )
     .unwrap();
 

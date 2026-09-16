@@ -75,6 +75,9 @@ cd src-tauri && cargo test         # Rust unit tests
 - `src-tauri/src/files.rs` — file name validation and collision suffixes
 - `src-tauri/src/settings.rs` — `settings.json` (PIN, Quick Save)
 - `src-tauri/src/window.rs` — remembered geometry and the square-window rule
+- `src-tauri/src/trust.rs` — the paired devices, keyed by certificate fingerprint
+- `src-tauri/src/tls.rs` — the certificate verifiers pairing rests on
+- `src-tauri/tests/paired.rs` — pairing end to end over real TLS
 - `assets/icon.svg` — the icon source; `src-tauri/icons/` is generated from it
 - `docs/*.png` — README screenshots, captured from the dev preview
 - `src-tauri/tests/receive.rs` — the receive routes end to end over plain HTTP
@@ -112,6 +115,9 @@ pnpm dev
   up or changing network needs an app restart for multicast; the `/24` scan re-resolves per run.
 - The subnet scan probes HTTPS only, matching the official app's default.
 - IPv6 discovery is not implemented. It is a LocalSend extension on top of v2.2, not part of it.
+- LocalSend's Dart app writes the checksum as `hash`, while the protocol doc and its own Rust
+  core say `sha256`. We read `sha256` only, so a checksum from the Dart app is not verified.
+  Verification is optional in the protocol, so this loses a check rather than breaking a transfer.
 - The official app holds TCP 53317 while it runs. Our Phase 3 server cannot bind that port on the
   same machine at the same time; test the two against each other from two machines, or stop one.
   UDP 53317 is shared fine, both use `SO_REUSEPORT`.
@@ -147,6 +153,35 @@ To try a real send by hand:
 ```bash
 TOSS_TARGET=192.168.1.5:53317 TOSS_SEND=/path/to/folder cargo test --test live_send -- --ignored --nocapture
 ```
+
+## Pairing and the clipboard
+
+Pairing a device does two things: its requests are accepted without asking, and
+text can be passed between the two clipboards.
+
+**What makes it safe.** A device is identified by the SHA-256 fingerprint of
+its TLS certificate, taken from the handshake, never from the `fingerprint`
+field in a request body. That field is trivially forged, which is why the
+protocol itself says to ignore it in HTTPS mode.
+
+- Our server asks every client for a certificate (`AnyClientCert`) and records
+  its fingerprint per connection, reaching handlers as `ConnectInfo<Peer>`.
+  Client certificates stay optional, so unpaired peers still work normally.
+- Sending to a paired device uses a client pinned to its fingerprint
+  (`PinnedServerCert`). A device answering at the same address with a different
+  certificate is refused, and the failure is reported as `wrong-device` rather
+  than a network error, via a flag the verifier raises.
+- Over plain HTTP nothing is ever treated as paired: there is no certificate to
+  go on. `PlainListener` always reports no fingerprint.
+
+**Clipboard text on the wire** is exactly what LocalSend sends: a single file
+whose `fileType` is `text/*` and whose `preview` holds the text. Toss spots
+that shape and keeps it out of Downloads, emitting `text-received` instead. The
+body is still read and dropped, so the sender sees an ordinary transfer.
+
+In the UI: right-click a circle to pair, unpair or send the clipboard. A paired
+device wears a solid ring. With one device paired, Cmd/Ctrl+Shift+V sends the
+clipboard to it. Incoming text is written to the clipboard automatically.
 
 ## The radar
 
@@ -203,6 +238,10 @@ This only happens in a dev build outside Tauri, so the packaged app never shows 
 | `cancel_send` | `sessionId` | — | Aborts an in-flight send and tells the peer |
 | `set_alias` | `alias` | `IdentityInfo` | Renames this device and re-announces at once |
 | `show_in_folder` | `path` | — | Reveals a received file in Finder or Explorer |
+| `list_trusted` | — | `TrustedDevice[]` | The paired devices |
+| `trust_device` | `deviceId` | `TrustedDevice` | Pairs, pinning that device's certificate fingerprint |
+| `untrust_device` | `deviceId` | `bool` | Unpairs |
+| `send_text` | `deviceId`, `text`, `pin?` | `SendSummary` | Sends text, which lands on the peer's clipboard |
 
 `send_files` rejects with `{ code, message }`. Codes: `declined`, `busy`, `pin-required`,
 `cancelled`, `connection-lost`, `no-files`, `too-many-requests`, `io-error`, `protocol-error`,
@@ -217,7 +256,8 @@ Frontend wrappers live in `src/lib/tauri.ts`. Always call through them, never `i
 | `devices-changed` | `Device[]` | A peer appears, changes address/alias, or ages out. A pure last-seen refresh does not fire it |
 | `incoming-request` | `{ sessionId, sender, files, totalSize }` | A peer asked to send. Answer with `respond_to_request` within 60s or it is declined |
 | `transfer-progress` | `{ sessionId, fileId, fileName, bytesReceived, totalBytes, direction }` | At most every 100ms per file, plus a final one. A single-chunk file produces exactly one |
-| `session-finished` | `{ sessionId, status, savedTo?, files?, direction?, reason? }` | `status` is `completed`, `cancelled`, `declined` or `error`. Sends carry `direction: "send"` |
+| `session-finished` | `{ sessionId, status, savedTo?, files?, direction?, reason?, kind? }` | `status` is `completed`, `cancelled`, `declined` or `error`. Sends carry `direction: "send"`, messages carry `kind: "text"` |
+| `text-received` | `{ sessionId, peer, alias, text }` | A message arrived. The UI writes it to the clipboard |
 
 `Device` = `{ fingerprint, alias, deviceModel, deviceType, ip, port, protocol, download, lastSeen }`.
 `fingerprint` is the stable id.

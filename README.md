@@ -30,6 +30,15 @@ see orbits around it.
   never overwrite anything; a second `cat.png` becomes `cat (1).png`.
 - **Watch** the ring around a circle fill as the transfer runs. Green when it
   lands, red with a reason when it does not.
+- **Pair** a device you use often by right-clicking its circle. Paired devices
+  skip the accept step, wear a solid ring, and can pass clipboard text both
+  ways. Copy on one machine, right-click the other's circle, send clipboard,
+  and it is ready to paste. With a single paired device, Cmd/Ctrl+Shift+V does
+  it without the menu.
+
+Pairing pins that device's TLS certificate. Something else answering at the
+same address is refused rather than trusted, so a paired device really is the
+one you paired with.
 
 ## Install
 
@@ -71,10 +80,16 @@ the two interoperate:
 - The same `prepare-upload`, `upload` and `cancel` routes, including the PIN
   and the checksum check.
 
-What Toss does not do, and LocalSend does: the download API, sharing text and
-clipboard, mobile builds, and sending to several devices at once.
+Clipboard text travels as a LocalSend message, a single `text/*` file with the
+text in `preview`, so the official app understands it too.
+
+What Toss does not do, and LocalSend does: the download API, mobile builds, and
+sending to several devices at once.
 
 ## Privacy
+
+Toss reads your clipboard only when you send it, and writes it only when a
+paired device sends you text. Nothing else touches it.
 
 Everything stays on your network. Toss has no servers, collects nothing, and
 never talks to the internet. The only things it writes are your identity, your

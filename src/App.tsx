@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CenterCircle } from "./components/CenterCircle";
 import { DeviceCircle, type Transfer } from "./components/DeviceCircle";
+import { DeviceMenu } from "./components/DeviceMenu";
 import { IncomingCard, SavedCard } from "./components/IncomingCard";
 import { Pulses } from "./components/Pulses";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -14,12 +16,18 @@ import {
   PREVIEW_DEVICES,
   PREVIEW_IDENTITY,
   PREVIEW_REQUEST,
+  PREVIEW_TEXT_REQUEST,
 } from "./lib/preview";
 import { hitTest, placeDevices } from "./lib/radar";
 import {
   getIdentity,
   getSettings,
   listDevices,
+  listTrusted,
+  onTextReceived,
+  sendText,
+  trustDevice,
+  untrustDevice,
   onDevicesChanged,
   onIncomingRequest,
   onSessionFinished,
@@ -33,6 +41,7 @@ import {
   type IdentityInfo,
   type IncomingRequest,
   type Settings,
+  type TrustedDevice,
 } from "./lib/tauri";
 
 const IDLE: Transfer = { phase: "idle", progress: 0 };
@@ -61,7 +70,7 @@ export default function App() {
   const radarRef = useRef<HTMLElement | null>(null);
   const [transfers, setTransfers] = useState<Record<string, Transfer>>({});
   const [incoming, setIncoming] = useState<IncomingRequest | null>(() =>
-    previewFlag("card") ? PREVIEW_REQUEST : null,
+    previewFlag("text") ? PREVIEW_TEXT_REQUEST : previewFlag("card") ? PREVIEW_REQUEST : null,
   );
   const [saved, setSaved] = useState<string[] | null>(() =>
     previewFlag("saved") ? ["/Users/me/Downloads/holiday.zip"] : null,
@@ -70,6 +79,9 @@ export default function App() {
   const [pending, setPending] = useState<string[] | null>(null);
   const [shaking, setShaking] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(() => previewFlag("settings"));
+  const [trusted, setTrusted] = useState<TrustedDevice[]>([]);
+  const [menu, setMenu] = useState<{ device: Device; x: number; y: number } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const placements = useMemo(() => placeDevices(devices.length, size), [devices.length, size]);
   // Drag events arrive outside React, so the hit test reads the latest
@@ -78,6 +90,11 @@ export default function App() {
   placementsRef.current = placements;
   const devicesRef = useRef(devices);
   devicesRef.current = devices;
+  const trustedRef = useRef(trusted);
+  trustedRef.current = trusted;
+
+  const isPaired = (device: Device) =>
+    trusted.some((entry) => entry.fingerprint === device.fingerprint);
 
   const setTransfer = useCallback((peer: string, transfer: Transfer) => {
     setTransfers((current) => ({ ...current, [peer]: transfer }));
@@ -124,16 +141,27 @@ export default function App() {
       applyPreviewTheme();
       setIdentity(PREVIEW_IDENTITY);
       setDevices(PREVIEW_DEVICES);
+      setTrusted([
+        { fingerprint: PREVIEW_DEVICES[0].fingerprint, alias: "Great Strawberry", trustedAt: 0 },
+      ]);
       setTransfer(PREVIEW_DEVICES[1].fingerprint, { phase: "active", progress: 0.42 });
       return;
     }
     getIdentity().then(setIdentity).catch(console.error);
     listDevices().then(setDevices).catch(console.error);
     getSettings().then(setSettings).catch(console.error);
+    listTrusted().then(setTrusted).catch(console.error);
 
     const unlisteners = [
       onDevicesChanged(setDevices),
       onIncomingRequest(setIncoming),
+      onTextReceived((received) => {
+        // Text from a paired device goes straight onto the clipboard, which
+        // is the whole point of pairing.
+        writeText(received.text)
+          .then(() => setNotice(`Copied from ${received.alias ?? "a paired device"}`))
+          .catch(() => setNotice("Could not reach the clipboard"));
+      }),
       onTransferProgress((update) => {
         if (!update.peer) return;
         const total = Math.max(update.sessionTotal, 1);
@@ -246,6 +274,14 @@ export default function App() {
       if (event.key === "Escape") {
         setPending(null);
         setSettingsOpen(false);
+        setMenu(null);
+      }
+      // One paired device makes the clipboard a keystroke away.
+      if (event.key.toLowerCase() === "v" && (event.metaKey || event.ctrlKey) && event.shiftKey) {
+        const only = devicesRef.current.find((device) =>
+          trustedRef.current.some((entry) => entry.fingerprint === device.fingerprint),
+        );
+        if (only) void sendClipboard(only);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -264,6 +300,48 @@ export default function App() {
     const timer = window.setTimeout(() => setSaved(null), SAVED_NOTICE_MS);
     return () => window.clearTimeout(timer);
   }, [saved]);
+
+  async function pair(device: Device) {
+    setMenu(null);
+    try {
+      await trustDevice(device.fingerprint);
+      setTrusted(await listTrusted());
+      setNotice(`Paired with ${device.alias}`);
+    } catch (error) {
+      setNotice(String(error));
+    }
+  }
+
+  async function unpair(device: Device) {
+    setMenu(null);
+    await untrustDevice(device.fingerprint).catch(console.error);
+    setTrusted(await listTrusted().catch(() => []));
+    setNotice(`Unpaired ${device.alias}`);
+  }
+
+  async function sendClipboard(device: Device) {
+    setMenu(null);
+    const text = await readText().catch(() => null);
+    if (!text) {
+      setNotice("The clipboard is empty");
+      return;
+    }
+    setTransfer(device.fingerprint, { phase: "active", progress: 0 });
+    try {
+      await sendText(device.fingerprint, text);
+      setTransfer(device.fingerprint, { phase: "done", progress: 1 });
+      clearTransferLater(device.fingerprint, FLASH_MS);
+      setNotice(`Clipboard sent to ${device.alias}`);
+    } catch (error) {
+      const failure = error as { code?: string; message?: string };
+      setTransfer(device.fingerprint, {
+        phase: "error",
+        progress: 0,
+        message: REASONS[failure.code ?? ""] ?? "Failed",
+      });
+      clearTransferLater(device.fingerprint, ERROR_MS);
+    }
+  }
 
   function answer(accept: boolean) {
     if (!incoming) return;
@@ -318,9 +396,33 @@ export default function App() {
           transfer={transfers[device.fingerprint] ?? IDLE}
           hovered={hovered === index}
           armed={pending !== null}
+          paired={isPaired(device)}
           onClick={() => onDeviceClick(device)}
+          onMenu={(x, y) => setMenu({ device, x, y })}
         />
       ))}
+
+      {menu && (
+        <DeviceMenu
+          device={menu.device}
+          paired={isPaired(menu.device)}
+          x={menu.x}
+          y={menu.y}
+          onPair={() => void pair(menu.device)}
+          onUnpair={() => void unpair(menu.device)}
+          onSendClipboard={() => void sendClipboard(menu.device)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      {notice && (
+        <p
+          className="absolute inset-x-0 bottom-3 text-center text-[11px]"
+          style={{ color: "var(--muted)" }}
+        >
+          {notice}
+        </p>
+      )}
 
       {incoming ? (
         <IncomingCard

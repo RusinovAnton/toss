@@ -6,7 +6,7 @@
  * instead. It is dev-only and never reachable from the packaged app.
  */
 import { isTauri } from "@tauri-apps/api/core";
-import type { Device, IdentityInfo } from "./tauri";
+import type { Device, IdentityInfo, IncomingRequest } from "./tauri";
 
 export function isPreview(): boolean {
   return import.meta.env.DEV && !isTauri();
@@ -24,11 +24,12 @@ export function previewFlag(name: string): boolean {
   return isPreview() && new URLSearchParams(window.location.search).has(name);
 }
 
-export const PREVIEW_REQUEST = {
+export const PREVIEW_REQUEST: IncomingRequest = {
   sessionId: "preview",
   sender: {
     alias: "Great Strawberry",
     fingerprint: "PEER-0",
+    verifiedFingerprint: "PEER-0",
     deviceModel: "Windows",
     ip: "192.168.1.10",
   },
@@ -38,6 +39,7 @@ export const PREVIEW_REQUEST = {
     { id: "c", fileName: "cat.png", size: 14_000_000, fileType: "image/png" },
   ],
   totalSize: 42_004_200,
+  text: null,
 };
 
 export const PREVIEW_IDENTITY: IdentityInfo = {
@@ -67,3 +69,11 @@ export const PREVIEW_DEVICES: Device[] = [
   download: false,
   lastSeen: Date.now(),
 }));
+
+/** A clipboard message arriving from an unpaired device. */
+export const PREVIEW_TEXT_REQUEST: IncomingRequest = {
+  ...PREVIEW_REQUEST,
+  files: [{ id: "a", fileName: "message.txt", size: 31, fileType: "text/plain" }],
+  totalSize: 31,
+  text: "https://example.com/a-long-link",
+};

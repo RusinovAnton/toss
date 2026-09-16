@@ -68,6 +68,9 @@ pub struct ActiveSession {
     pub id: String,
     pub sender: Sender,
     pub files: HashMap<String, IncomingFile>,
+    /// The text, when this session is a clipboard message rather than files.
+    /// Such a session is never written to disk.
+    pub message: Option<String>,
     /// Flipped by `/cancel`. In-flight uploads check it between chunks.
     pub cancelled: Arc<AtomicBool>,
     completed: HashSet<String>,
@@ -293,6 +296,16 @@ impl SessionManager {
         cancelled
     }
 
+    /// The text of the active session, when it is a clipboard message.
+    pub fn active_message(&self, session_id: &str) -> Option<String> {
+        let inner = self.lock();
+        inner
+            .active
+            .as_ref()
+            .filter(|active| active.id == session_id)
+            .and_then(|active| active.message.clone())
+    }
+
     /// The sender of the active session, for progress events.
     pub fn active_sender(&self, session_id: &str) -> Option<Sender> {
         let inner = self.lock();
@@ -310,6 +323,7 @@ pub fn build_active_session(
     sender: Sender,
     offered: &[IncomingFile],
     accepted_ids: &[String],
+    message: Option<String>,
 ) -> ActiveSession {
     let accepted: HashSet<&String> = accepted_ids.iter().collect();
     let files = offered
@@ -321,6 +335,7 @@ pub fn build_active_session(
         id,
         sender,
         files,
+        message,
         cancelled: Arc::new(AtomicBool::new(false)),
         completed: HashSet::new(),
         saved_paths: Vec::new(),
@@ -367,6 +382,7 @@ mod tests {
             sender(),
             &offered,
             &accepted,
+            None,
         ));
     }
 
@@ -413,7 +429,7 @@ mod tests {
     fn only_accepted_files_end_up_in_the_session() {
         let offered = vec![file("a", "t1"), file("b", "t2")];
         let session =
-            build_active_session("s1".into(), sender(), &offered, &["a".to_string()]);
+            build_active_session("s1".into(), sender(), &offered, &["a".to_string()], None);
         assert_eq!(session.files.len(), 1);
         assert!(session.files.contains_key("a"));
     }
@@ -478,6 +494,24 @@ mod tests {
         assert!(cancelled.load(Ordering::SeqCst));
         assert!(!manager.is_busy());
         assert!(!manager.cancel("s1"));
+    }
+
+    #[test]
+    fn a_message_session_remembers_its_text() {
+        let manager = SessionManager::new();
+        let offered = vec![file("a", "tok")];
+        manager.activate(build_active_session(
+            "s1".into(),
+            sender(),
+            &offered,
+            &["a".to_string()],
+            Some("hello clipboard".into()),
+        ));
+        assert_eq!(
+            manager.active_message("s1").as_deref(),
+            Some("hello clipboard")
+        );
+        assert_eq!(manager.active_message("other"), None);
     }
 
     #[test]

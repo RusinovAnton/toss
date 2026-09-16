@@ -24,7 +24,9 @@ export function DeviceCircle({
   transfer,
   hovered,
   armed,
+  paired,
   onClick,
+  onMenu,
 }: {
   device: Device;
   placement: Placement;
@@ -33,7 +35,10 @@ export function DeviceCircle({
   hovered: boolean;
   /** Waiting for a target after the file picker. */
   armed: boolean;
+  /** Paired: accepted without asking, and the clipboard flows both ways. */
+  paired: boolean;
   onClick: () => void;
+  onMenu: (x: number, y: number) => void;
 }) {
   const active = transfer.phase === "active";
   const percentage = Math.round(transfer.progress * 100);
@@ -42,6 +47,10 @@ export function DeviceCircle({
     <button
       type="button"
       onClick={onClick}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onMenu(placement.x, placement.y);
+      }}
       className="device-appear absolute flex flex-col items-center outline-none"
       style={{
         left: placement.x,
@@ -72,7 +81,7 @@ export function DeviceCircle({
             cy={ARC_BOX / 2}
             r={ARC_RADIUS}
             fill="none"
-            strokeWidth={hovered || armed ? 2 : 1}
+            strokeWidth={hovered || armed || paired ? 2 : 1}
             className={
               transfer.phase === "done"
                 ? "flash-ok"
@@ -81,7 +90,11 @@ export function DeviceCircle({
                   : undefined
             }
             style={{
-              stroke: hovered || armed ? "var(--accent)" : "var(--ring)",
+              // A paired device wears a solid ring, so pairing is visible
+              // without opening anything.
+              stroke:
+                hovered || armed || paired ? "var(--accent)" : "var(--ring)",
+              opacity: paired && !hovered && !armed ? 0.7 : 1,
               transition: "stroke 150ms ease",
             }}
           />

@@ -9,6 +9,8 @@ use crate::protocol::{
     read_info, FileDto, PrepareUploadRequest, PrepareUploadResponse, ProtocolType, SharedInfo,
 };
 use crate::server::{Emitter, SESSION_FINISHED_EVENT, TRANSFER_PROGRESS_EVENT};
+use crate::tls::PinnedServerCert;
+use crate::trust::TrustStore;
 use futures_util::stream;
 use serde::Serialize;
 use serde_json::json;
@@ -55,7 +57,11 @@ pub struct OutgoingFile {
     pub file_name: String,
     pub size: u64,
     pub file_type: String,
+    /// Where to read the bytes. Empty for a message, which carries its own.
     pub path: PathBuf,
+    /// Set only for a text message: the text itself, which is how LocalSend
+    /// sends one.
+    pub preview: Option<String>,
 }
 
 impl OutgoingFile {
@@ -68,8 +74,47 @@ impl OutgoingFile {
             // Hashing means reading every file twice. The field is nullable
             // and the receiver only checks it when present, so it is left out.
             sha256: None,
-            preview: None,
+            preview: self.preview.clone(),
             metadata: None,
+        }
+    }
+}
+
+/// A client, and the flag its certificate check raises when it refuses a
+/// device that is not the one we paired with.
+#[derive(Clone)]
+struct PinnedClient {
+    client: reqwest::Client,
+    rejected: Option<Arc<AtomicBool>>,
+}
+
+impl PinnedClient {
+    fn unpinned(client: reqwest::Client) -> Self {
+        PinnedClient {
+            client,
+            rejected: None,
+        }
+    }
+
+    /// Clears the flag so a later failure can only refer to this request.
+    fn arm(&self) -> &reqwest::Client {
+        if let Some(rejected) = &self.rejected {
+            rejected.store(false, Ordering::SeqCst);
+        }
+        &self.client
+    }
+
+    /// Turns a request failure into the right error. A refused certificate is
+    /// not an ordinary network problem: the peer is not the paired device.
+    fn error(&self, error: &reqwest::Error) -> SendError {
+        let refused = self
+            .rejected
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst));
+        if refused {
+            SendError::WrongDevice
+        } else {
+            SendError::Connection(error.to_string())
         }
     }
 }
@@ -77,6 +122,8 @@ impl OutgoingFile {
 #[derive(Debug)]
 pub enum SendError {
     NoFiles,
+    /// A paired device answered with a different certificate.
+    WrongDevice,
     /// The peer's user said no, or accepted nothing.
     Declined,
     /// The peer is busy with another session.
@@ -96,6 +143,7 @@ impl SendError {
     pub fn code(&self) -> &'static str {
         match self {
             SendError::NoFiles => "no-files",
+            SendError::WrongDevice => "wrong-device",
             SendError::Declined => "declined",
             SendError::Busy => "busy",
             SendError::PinRequired => "pin-required",
@@ -112,6 +160,7 @@ impl fmt::Display for SendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SendError::NoFiles => f.write_str("nothing to send"),
+            SendError::WrongDevice => f.write_str("Not the paired device"),
             SendError::Declined => f.write_str("Declined"),
             SendError::Busy => f.write_str("Busy"),
             SendError::PinRequired => f.write_str("PIN required"),
@@ -155,10 +204,18 @@ struct ActiveSend {
 }
 
 pub struct SendManager {
+    /// For devices we have not paired with: any certificate is accepted,
+    /// which is the protocol's normal mode.
     client: reqwest::Client,
     info: SharedInfo,
     emit: Emitter,
     active: Mutex<HashMap<String, ActiveSend>>,
+    trusted: Arc<Mutex<TrustStore>>,
+    certificate_pem: String,
+    private_key_pem: String,
+    /// One client per paired device, each pinned to that device's
+    /// certificate. Cached so sending keeps its connection pool.
+    pinned: Mutex<HashMap<String, PinnedClient>>,
 }
 
 impl SendManager {
@@ -167,6 +224,7 @@ impl SendManager {
         cert_pem: &str,
         key_pem: &str,
         emit: Emitter,
+        trusted: Arc<Mutex<TrustStore>>,
     ) -> Result<Self, String> {
         let mut bundle = Vec::with_capacity(cert_pem.len() + key_pem.len());
         bundle.extend_from_slice(cert_pem.as_bytes());
@@ -186,6 +244,132 @@ impl SendManager {
             info,
             emit,
             active: Mutex::new(HashMap::new()),
+            trusted,
+            certificate_pem: cert_pem.to_string(),
+            private_key_pem: key_pem.to_string(),
+            pinned: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// The client to talk to `target` with.
+    ///
+    /// A paired device gets one that refuses any certificate but the pinned
+    /// one, so taking over its address is not enough to receive its files.
+    fn client_for(&self, target: &Target) -> Result<PinnedClient, SendError> {
+        let pinned_fingerprint = {
+            let trusted = self.trusted.lock().expect("trust store poisoned");
+            trusted.get(&target.fingerprint).map(|d| d.fingerprint.clone())
+        };
+        let Some(fingerprint) = pinned_fingerprint else {
+            return Ok(PinnedClient::unpinned(self.client.clone()));
+        };
+        if let Some(client) = self
+            .pinned
+            .lock()
+            .expect("pinned clients poisoned")
+            .get(&fingerprint)
+        {
+            return Ok(client.clone());
+        }
+        let client = self.build_pinned_client(&fingerprint)?;
+        self.pinned
+            .lock()
+            .expect("pinned clients poisoned")
+            .insert(fingerprint, client.clone());
+        Ok(client)
+    }
+
+    fn build_pinned_client(&self, fingerprint: &str) -> Result<PinnedClient, SendError> {
+        use tokio_rustls::rustls::pki_types::pem::PemObject;
+        use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        use tokio_rustls::rustls::ClientConfig;
+
+        crate::tls::install_provider();
+        let certs = CertificateDer::pem_slice_iter(self.certificate_pem.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| SendError::Protocol(format!("our certificate is unreadable: {e:?}")))?;
+        let key = PrivateKeyDer::from_pem_slice(self.private_key_pem.as_bytes())
+            .map_err(|e| SendError::Protocol(format!("our private key is unreadable: {e:?}")))?;
+
+        let verifier = Arc::new(PinnedServerCert::new(Some(fingerprint.to_string())));
+        let rejected = verifier.rejection_flag();
+        let mut config = ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_client_auth_cert(certs, key)
+            .map_err(|e| SendError::Protocol(format!("TLS setup failed: {e}")))?;
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
+        let client = reqwest::Client::builder()
+            .use_preconfigured_tls(config)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .build()
+            .map_err(|e| SendError::Protocol(e.to_string()))?;
+        Ok(PinnedClient {
+            client,
+            rejected: Some(rejected),
+        })
+    }
+
+    /// Sends a line of text, the way LocalSend sends a message.
+    ///
+    /// Paired devices use this for the clipboard. The receiving side spots
+    /// the single `text/*` file and copies it rather than saving it.
+    pub async fn send_text(
+        &self,
+        target: Target,
+        text: &str,
+        pin: Option<String>,
+    ) -> Result<SendSummary, SendError> {
+        if text.is_empty() {
+            return Err(SendError::NoFiles);
+        }
+        let (file, bytes) = text_message(text);
+        let files = vec![file];
+        let prepared = self.prepare(&target, &files, pin.as_deref()).await?;
+
+        let mut bytes_sent = 0u64;
+        for (file_id, token) in &prepared.files {
+            let Some(file) = files.iter().find(|f| &f.id == file_id) else {
+                return Err(SendError::Protocol(format!("unknown file id {file_id}")));
+            };
+            let url = target.url(&format!(
+                "/api/localsend/v2/upload?sessionId={}&fileId={}&token={}",
+                urlencode(&prepared.session_id),
+                urlencode(&file.id),
+                urlencode(token)
+            ));
+            let client = self.client_for(&target)?;
+            let response = client
+                .arm()
+                .post(&url)
+                .header(reqwest::header::CONTENT_LENGTH, bytes.len())
+                .body(bytes.clone())
+                .send()
+                .await
+                .map_err(|e| client.error(&e))?;
+            match response.status().as_u16() {
+                200 | 204 => bytes_sent += bytes.len() as u64,
+                403 => return Err(SendError::Declined),
+                409 => return Err(SendError::Cancelled),
+                other => return Err(SendError::Protocol(format!("HTTP {other}"))),
+            }
+        }
+
+        (self.emit)(
+            SESSION_FINISHED_EVENT,
+            json!({
+                "sessionId": prepared.session_id,
+                "status": "completed",
+                "direction": "send",
+                "peer": target.fingerprint,
+                "kind": "text",
+            }),
+        );
+        Ok(SendSummary {
+            session_id: prepared.session_id,
+            files_sent: prepared.files.len(),
+            bytes_sent,
         })
     }
 
@@ -284,13 +468,14 @@ impl SendManager {
                 .collect(),
         };
 
-        let response = self
-            .client
+        let client = self.client_for(target)?;
+        let response = client
+            .arm()
             .post(&url)
             .json(&request)
             .send()
             .await
-            .map_err(|e| SendError::Connection(e.to_string()))?;
+            .map_err(|e| client.error(&e))?;
 
         match response.status().as_u16() {
             200 => response
@@ -432,8 +617,9 @@ impl SendManager {
             urlencode(&file.id),
             urlencode(token)
         ));
-        let response = self
-            .client
+        let client = self.client_for(target)?;
+        let response = client
+            .arm()
             .post(&url)
             .header(reqwest::header::CONTENT_LENGTH, file.size)
             .body(body)
@@ -443,7 +629,7 @@ impl SendManager {
                 if cancelled.load(Ordering::SeqCst) {
                     SendError::Cancelled
                 } else {
-                    SendError::Connection(e.to_string())
+                    client.error(&e)
                 }
             })?;
 
@@ -488,7 +674,9 @@ impl SendManager {
             urlencode(session_id)
         ));
         // A peer that cannot be told is still cancelled on our side.
-        let _ = self.client.post(&url).send().await;
+        if let Ok(client) = self.client_for(&target) {
+            let _ = client.arm().post(&url).send().await;
+        }
         Ok(())
     }
 }
@@ -505,6 +693,28 @@ fn urlencode(value: &str) -> String {
             other => format!("%{other:02X}"),
         })
         .collect()
+}
+
+/// The name a clipboard message is sent under.
+///
+/// LocalSend recognises a message by its single `text/*` file carrying the
+/// text in `preview`, so the name only matters if the receiver saves it.
+const MESSAGE_FILE_NAME: &str = "message.txt";
+
+/// Builds the one-file offer LocalSend uses for a text message: the text goes
+/// in `preview`, and the body carries the same bytes for receivers that save
+/// it as a file.
+pub fn text_message(text: &str) -> (OutgoingFile, Vec<u8>) {
+    let bytes = text.as_bytes().to_vec();
+    let file = OutgoingFile {
+        id: uuid::Uuid::new_v4().to_string(),
+        file_name: MESSAGE_FILE_NAME.to_string(),
+        size: bytes.len() as u64,
+        file_type: "text/plain".to_string(),
+        path: PathBuf::new(),
+        preview: Some(text.to_string()),
+    };
+    (file, bytes)
 }
 
 /// Expands `paths` into the flat file list the protocol wants.
@@ -544,6 +754,7 @@ pub fn collect_files(paths: &[PathBuf]) -> Result<Vec<OutgoingFile>, SendError> 
             file_name,
             size,
             path,
+            preview: None,
         })
         .collect())
 }
@@ -724,6 +935,26 @@ mod tests {
     }
 
     #[test]
+    fn a_text_message_carries_the_text_in_the_preview() {
+        let (file, bytes) = text_message("hello clipboard");
+        assert_eq!(file.file_type, "text/plain");
+        assert_eq!(file.file_name, "message.txt");
+        assert_eq!(file.size, 15);
+        assert_eq!(bytes, b"hello clipboard");
+        let json = serde_json::to_value(file.to_dto()).unwrap();
+        // This is the shape LocalSend recognises as a message.
+        assert_eq!(json["fileType"], "text/plain");
+        assert_eq!(json["preview"], "hello clipboard");
+    }
+
+    #[test]
+    fn a_message_counts_bytes_not_characters() {
+        let (file, bytes) = text_message("héllo ☕");
+        assert_eq!(file.size as usize, bytes.len());
+        assert!(file.size > 7);
+    }
+
+    #[test]
     fn the_dto_carries_no_checksum() {
         let file = OutgoingFile {
             id: "a".into(),
@@ -731,6 +962,7 @@ mod tests {
             size: 3,
             file_type: "image/png".into(),
             path: PathBuf::from("/tmp/cat.png"),
+            preview: None,
         };
         let json = serde_json::to_value(file.to_dto()).unwrap();
         assert_eq!(json["fileName"], "cat.png");

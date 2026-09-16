@@ -35,6 +35,7 @@ tokio-rustls = "0.26.5"
 dirs = "7.0.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 tauri-plugin-dialog = "2.7.3"
+tauri-plugin-clipboard-manager = "2.3.3"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

@@ -10,7 +10,9 @@ pub mod protocol;
 pub mod send;
 pub mod server;
 pub mod session;
+pub mod tls;
 pub mod settings;
+pub mod trust;
 pub mod window;
 
 use protocol::SharedInfo;
@@ -31,6 +33,7 @@ pub struct AppState {
     pub sessions: Arc<session::SessionManager>,
     pub sender: Arc<send::SendManager>,
     pub settings: Arc<Mutex<settings::Settings>>,
+    pub trusted: Arc<Mutex<trust::TrustStore>>,
     pub config_dir: PathBuf,
     pub geometry: Mutex<GeometryState>,
 }
@@ -165,6 +168,72 @@ fn set_settings(
     Ok(current.clone())
 }
 
+/// The devices this one is paired with.
+#[tauri::command]
+fn list_trusted(state: tauri::State<'_, AppState>) -> Result<Vec<trust::TrustedDevice>, String> {
+    Ok(state.trusted.lock().map_err(|e| e.to_string())?.list())
+}
+
+/// Pairs with a discovered device, so its requests are accepted without
+/// asking and clipboard text can flow both ways.
+///
+/// The fingerprint is pinned: from now on that device has to present the same
+/// certificate, and a device that does not is refused rather than trusted.
+#[tauri::command]
+fn trust_device(
+    state: tauri::State<'_, AppState>,
+    device_id: String,
+) -> Result<trust::TrustedDevice, String> {
+    let device = state
+        .discovery
+        .registry
+        .find(&device_id)
+        .ok_or_else(|| "That device is no longer around".to_string())?;
+    let mut trusted = state.trusted.lock().map_err(|e| e.to_string())?;
+    let entry = trusted
+        .trust(&device.fingerprint, &device.alias)
+        .ok_or_else(|| "That device has no fingerprint to pair with".to_string())?;
+    trusted.save(&state.config_dir).map_err(|e| e.to_string())?;
+    Ok(entry)
+}
+
+#[tauri::command]
+fn untrust_device(state: tauri::State<'_, AppState>, device_id: String) -> Result<bool, String> {
+    let mut trusted = state.trusted.lock().map_err(|e| e.to_string())?;
+    let removed = trusted.untrust(&device_id);
+    if removed {
+        trusted.save(&state.config_dir).map_err(|e| e.to_string())?;
+    }
+    Ok(removed)
+}
+
+/// Sends text to a paired device, which lands on its clipboard.
+#[tauri::command]
+async fn send_text(
+    state: tauri::State<'_, AppState>,
+    device_id: String,
+    text: String,
+    pin: Option<String>,
+) -> Result<send::SendSummary, send::SendErrorPayload> {
+    let device = state.discovery.registry.find(&device_id).ok_or_else(|| {
+        send::SendErrorPayload {
+            code: "unknown-device".into(),
+            message: "That device is no longer around".into(),
+        }
+    })?;
+    let target = send::Target {
+        fingerprint: device.fingerprint,
+        ip: device.ip,
+        port: device.port,
+        protocol: device.protocol,
+    };
+    let sender = Arc::clone(&state.sender);
+    sender
+        .send_text(target, &text, pin)
+        .await
+        .map_err(send::SendErrorPayload::from)
+}
+
 /// Where received files are written. Not configurable in v1.
 #[tauri::command]
 fn download_dir() -> String {
@@ -192,10 +261,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let config_dir = app.path().app_data_dir()?;
             let identity = identity::Identity::load_or_create(&config_dir)?;
             let settings = Arc::new(Mutex::new(settings::Settings::load(&config_dir)));
+            let trusted = Arc::new(Mutex::new(trust::TrustStore::load(&config_dir)));
             let sessions = Arc::new(session::SessionManager::new());
             let info: SharedInfo = Arc::new(Mutex::new(identity.to_device_info()));
 
@@ -221,6 +292,7 @@ pub fn run() {
                 info: Arc::clone(&info),
                 sessions: Arc::clone(&sessions),
                 settings: Arc::clone(&settings),
+                trusted: Arc::clone(&trusted),
                 download_dir: default_download_dir(),
                 emit: Arc::new(move |event, payload| {
                     if let Err(e) = handle.emit(event, payload) {
@@ -240,6 +312,7 @@ pub fn run() {
                         eprintln!("failed to emit {event}: {e}");
                     }
                 }),
+                Arc::clone(&trusted),
             )?);
 
             let cert = identity.certificate_pem.clone();
@@ -260,6 +333,7 @@ pub fn run() {
                 sessions,
                 sender,
                 settings,
+                trusted,
                 config_dir,
                 geometry: Mutex::new(GeometryState {
                     current: stored.unwrap_or_default(),
@@ -298,7 +372,11 @@ pub fn run() {
             rescan,
             respond_to_request,
             send_files,
+            send_text,
             cancel_send,
+            list_trusted,
+            trust_device,
+            untrust_device,
             get_settings,
             set_settings,
             download_dir,

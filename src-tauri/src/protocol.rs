@@ -211,6 +211,29 @@ pub struct PrepareUploadResponse {
     pub files: HashMap<String, String>,
 }
 
+/// The text of a message offer, if this is one.
+///
+/// LocalSend sends a message as a single `text/*` file with the text in
+/// `preview`; older versions put the bare enum name `text` in `fileType`.
+/// Anything else is an ordinary file transfer.
+pub fn text_message_of(files: &HashMap<String, FileDto>) -> Option<String> {
+    if files.len() != 1 {
+        return None;
+    }
+    let file = files.values().next()?;
+    let is_text = file
+        .file_type
+        .as_deref()
+        .is_some_and(|kind| kind.starts_with("text/") || kind == "text");
+    if !is_text {
+        return None;
+    }
+    file.preview
+        .as_deref()
+        .filter(|preview| !preview.is_empty())
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +339,53 @@ mod tests {
         .unwrap();
         assert_eq!(json["sessionId"], "s1");
         assert_eq!(json["files"]["fileId"], "token");
+    }
+
+    fn files_from(json: &str) -> HashMap<String, FileDto> {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn a_single_text_file_with_a_preview_is_a_message() {
+        let files = files_from(
+            r#"{"a":{"id":"a","fileName":"message.txt","size":5,"fileType":"text/plain",
+                 "preview":"hello"}}"#,
+        );
+        assert_eq!(text_message_of(&files).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn the_legacy_file_type_name_is_recognised_too() {
+        let files = files_from(
+            r#"{"a":{"id":"a","fileName":"m.txt","size":2,"fileType":"text","preview":"hi"}}"#,
+        );
+        assert_eq!(text_message_of(&files).as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn a_text_file_without_a_preview_is_an_ordinary_file() {
+        let files = files_from(
+            r#"{"a":{"id":"a","fileName":"notes.txt","size":9,"fileType":"text/plain"}}"#,
+        );
+        assert_eq!(text_message_of(&files), None);
+    }
+
+    #[test]
+    fn a_non_text_file_is_never_a_message() {
+        let files = files_from(
+            r#"{"a":{"id":"a","fileName":"cat.png","size":9,"fileType":"image/png",
+                 "preview":"thumbnail"}}"#,
+        );
+        assert_eq!(text_message_of(&files), None);
+    }
+
+    #[test]
+    fn several_files_are_never_a_message() {
+        let files = files_from(
+            r#"{"a":{"id":"a","fileName":"m.txt","size":2,"fileType":"text/plain","preview":"hi"},
+                "b":{"id":"b","fileName":"n.txt","size":2,"fileType":"text/plain","preview":"yo"}}"#,
+        );
+        assert_eq!(text_message_of(&files), None);
     }
 
     #[test]

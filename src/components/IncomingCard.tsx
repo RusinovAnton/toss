@@ -15,8 +15,10 @@ export function IncomingCard({
   onAccept: () => void;
   onDeny: () => void;
 }) {
-  const summary =
-    request.files.length === 1
+  // A clipboard message shows its text, so nobody accepts blind.
+  const summary = request.text
+    ? request.text
+    : request.files.length === 1
       ? request.files[0].fileName
       : `${request.files.length} files · ${formatBytes(request.totalSize)}`;
 
@@ -26,8 +28,12 @@ export function IncomingCard({
         <span className="text-xl leading-none">{deviceEmoji("desktop")}</span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px] font-medium">{request.sender.alias}</p>
-          <p className="truncate text-[11px]" style={{ color: "var(--muted)" }}>
-            {summary}
+          <p
+            className="truncate text-[11px]"
+            style={{ color: "var(--muted)" }}
+            title={summary}
+          >
+            {request.text ? `“${summary}”` : summary}
           </p>
         </div>
       </div>

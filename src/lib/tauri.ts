@@ -65,13 +65,18 @@ export interface IncomingFile {
 export interface IncomingRequest {
   sessionId: string;
   sender: {
-    alias: string;
+    /** What the sender claims. Only meaningful without encryption. */
     fingerprint: string;
+    /** What the handshake proved. This is what pairing uses. */
+    verifiedFingerprint: string | null;
+    alias: string;
     deviceModel: string | null;
     ip: string;
   };
   files: IncomingFile[];
   totalSize: number;
+  /** Set when this is clipboard text rather than files. */
+  text: string | null;
 }
 
 export interface TransferProgress {
@@ -104,6 +109,53 @@ export function respondToRequest(
   acceptedFileIds: string[],
 ): Promise<void> {
   return invoke("respond_to_request", { sessionId, acceptedFileIds });
+}
+
+export interface TrustedDevice {
+  /** SHA-256 of the device's certificate. Its identity. */
+  fingerprint: string;
+  alias: string;
+  trustedAt: number;
+}
+
+export interface TextReceived {
+  sessionId: string;
+  peer: string | null;
+  alias: string | null;
+  text: string;
+}
+
+/** Devices this one is paired with. */
+export function listTrusted(): Promise<TrustedDevice[]> {
+  return invoke<TrustedDevice[]>("list_trusted");
+}
+
+/**
+ * Pairs with a device. Its requests are then accepted without asking, and
+ * clipboard text can flow both ways. The certificate is pinned, so a device
+ * that later presents a different one is refused rather than trusted.
+ */
+export function trustDevice(deviceId: string): Promise<TrustedDevice> {
+  return invoke<TrustedDevice>("trust_device", { deviceId });
+}
+
+export function untrustDevice(deviceId: string): Promise<boolean> {
+  return invoke<boolean>("untrust_device", { deviceId });
+}
+
+/** Sends text to a paired device, landing on its clipboard. */
+export function sendText(
+  deviceId: string,
+  text: string,
+  pin?: string,
+): Promise<SendSummary> {
+  return invoke<SendSummary>("send_text", { deviceId, text, pin: pin ?? null });
+}
+
+export function onTextReceived(
+  handler: (received: TextReceived) => void,
+): Promise<UnlistenFn> {
+  return listen<TextReceived>("text-received", (event) => handler(event.payload));
 }
 
 export interface SendSummary {

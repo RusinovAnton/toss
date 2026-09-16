@@ -5,14 +5,14 @@
 //! router behind `bind_tls`, so nothing about the behaviour changes.
 
 use serde_json::{json, Value};
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use toss_lib::protocol::{DeviceInfo, DeviceType, ProtocolType, PROTOCOL_VERSION};
-use toss_lib::server::{router, ServerState};
+use toss_lib::server::{router, serve, PlainListener, ServerState};
 use toss_lib::session::SessionManager;
 use toss_lib::settings::Settings;
+use toss_lib::trust::TrustStore;
 
 type Events = Arc<Mutex<Vec<(String, Value)>>>;
 
@@ -127,6 +127,7 @@ async fn harness(settings: Settings) -> Harness {
         })),
         sessions: Arc::new(SessionManager::new()),
         settings: Arc::new(Mutex::new(settings)),
+        trusted: Arc::new(Mutex::new(TrustStore::default())),
         download_dir: download_dir.clone(),
         emit: Arc::new(move |event, payload| {
             sink.lock().unwrap().push((event.to_string(), payload));
@@ -134,16 +135,11 @@ async fn harness(settings: Settings) -> Harness {
         register_peer: Arc::new(|_, _| {}),
     });
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = PlainListener::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = router(Arc::clone(&state));
     tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
+        serve(listener, app).await.unwrap();
     });
 
     Harness {
