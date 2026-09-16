@@ -35,7 +35,9 @@ cd src-tauri && cargo test         # Rust unit tests
 
 - `src/App.tsx` — root component (radar UI lives here later)
 - `src/lib/` — pure TS helpers (formatting, geometry); unit-tested
-- `src-tauri/src/lib.rs` — Tauri builder, command registration
+- `src/lib/tauri.ts` — typed wrappers for every Tauri command / event
+- `src-tauri/src/lib.rs` — Tauri builder, `AppState`, command registration
+- `src-tauri/src/identity.rs` — alias, rcgen cert, fingerprint, `identity.json` persistence
 - `src-tauri/tauri.conf.json` — window (480x480, min 360), identifier `dev.toss.app`
 - `src-tauri/capabilities/default.json` — permissions for the `main` window
 
@@ -51,7 +53,11 @@ cd src-tauri && cargo test         # Rust unit tests
 
 ## Tauri commands
 
-_None yet. Phase 1 adds `get_identity()`._
+| Command | Args | Returns | Notes |
+|---|---|---|---|
+| `get_identity` | — | `{ alias, fingerprint, deviceModel, deviceType, port }` | Loaded once in `setup` from `identity.json` in the app-data dir |
+
+Frontend wrappers live in `src/lib/tauri.ts`. Always call through them, never `invoke` directly in components.
 
 ## Tauri events
 
@@ -59,13 +65,28 @@ _None yet._
 
 ## Protocol quirks
 
-_None recorded yet. When the protocol doc is ambiguous, test against the
-official LocalSend app and record the observed behaviour here._
+Facts verified against the protocol repo and official app source (`packages/core`):
+
+- **Fingerprint** = SHA-256 of the certificate **DER**, **uppercase hex, no colons** (64 chars).
+  The official app compares fingerprints after `to_ascii_uppercase()`.
+- **Certificate**: official app uses RSA-2048, `CN=LocalSend User`, no SANs, rcgen default
+  validity (1975..4096, never expires). We use rcgen default ECDSA P-256, `CN=Toss`. Peers only
+  check self-signature + time validity + fingerprint, so key type and CN do not matter.
+- **Official app offers/expects mutual TLS**: its server calls `offer_client_auth() = true`
+  (mandatory flag configurable). Our HTTPS client should present our own cert as client cert.
+- **Current protocol version is 2.2** (app 1.18+). 2.1 added `pin` query + `401`/`429` + file
+  `metadata`; 2.2 added `422` on sha256 mismatch on `/upload`. We announce `2.2`, so the receive
+  path must verify `sha256` when provided.
+- **`deviceModel` strings the official app sends**: `macOS`, `Windows`, `Linux`, `Fuchsia`;
+  Android = brand in PascalCase (`Samsung`, `Google`, `Xiaomi`); iOS = `localizedModel`
+  (`iPhone`, `iPad`); web = browser name (`Google Chrome`, `Firefox`, `Safari`, ...).
+- Unknown `deviceType` values must be tolerated; the official app falls back to `desktop`.
+- Default alias format is "Adjective Fruit" (e.g. "Nice Orange"). We mirror that.
 
 ## Phase status
 
 - [x] Phase 0 — Scaffold
-- [ ] Phase 1 — Identity and certificate
+- [x] Phase 1 — Identity and certificate
 - [ ] Phase 2 — Discovery
 - [ ] Phase 3 — Receive
 - [ ] Phase 4 — Send
