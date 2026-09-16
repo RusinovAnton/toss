@@ -10,7 +10,15 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
+
+/// How long an active session may sit without any upload activity before a
+/// new sender may take the receiver over.
+///
+/// Without this, a sender that dies mid-transfer, or one whose connection
+/// drops, would hold the single session slot until the app restarts.
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What the user chose for a pending request.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,12 +72,21 @@ pub struct ActiveSession {
     pub cancelled: Arc<AtomicBool>,
     completed: HashSet<String>,
     saved_paths: Vec<PathBuf>,
+    /// Bytes written per file, so the UI can show one arc for the whole
+    /// session rather than restarting it at every file.
+    received: HashMap<String, u64>,
+    last_activity: Instant,
 }
 
 impl ActiveSession {
     /// Whether every accepted file has been written.
     pub fn is_finished(&self) -> bool {
         self.completed.len() == self.files.len()
+    }
+
+    /// Total size of every accepted file.
+    pub fn total_bytes(&self) -> u64 {
+        self.files.values().map(|file| file.size).sum()
     }
 }
 
@@ -112,10 +129,35 @@ impl SessionManager {
         inner.pending.is_some() || inner.active.is_some()
     }
 
+    /// Drops an active session that has gone quiet, so an abandoned transfer
+    /// does not block the receiver for good.
+    fn evict_if_idle(inner: &mut Inner, timeout: Duration) {
+        let idle = inner
+            .active
+            .as_ref()
+            .is_some_and(|active| active.last_activity.elapsed() >= timeout);
+        if idle {
+            if let Some(active) = inner.active.take() {
+                active.cancelled.store(true, Ordering::SeqCst);
+                eprintln!("dropped session {} after {timeout:?} of silence", active.id);
+            }
+        }
+    }
+
     /// Claims the single session slot and registers the channel the user's
     /// decision arrives on. `Err(Busy)` when someone else already holds it.
     pub fn begin(&self, id: &str) -> Result<oneshot::Receiver<Decision>, SessionError> {
+        self.begin_with_timeout(id, IDLE_TIMEOUT)
+    }
+
+    /// [`SessionManager::begin`] with an explicit idle timeout, for tests.
+    pub fn begin_with_timeout(
+        &self,
+        id: &str,
+        timeout: Duration,
+    ) -> Result<oneshot::Receiver<Decision>, SessionError> {
         let mut inner = self.lock();
+        Self::evict_if_idle(&mut inner, timeout);
         if inner.pending.is_some() || inner.active.is_some() {
             return Err(SessionError::Busy);
         }
@@ -169,8 +211,8 @@ impl SessionManager {
         token: &str,
         peer: IpAddr,
     ) -> Result<(IncomingFile, Arc<AtomicBool>), SessionError> {
-        let inner = self.lock();
-        let Some(active) = inner.active.as_ref() else {
+        let mut inner = self.lock();
+        let Some(active) = inner.active.as_mut() else {
             return Err(SessionError::Rejected);
         };
         if active.id != session_id {
@@ -186,7 +228,26 @@ impl SessionManager {
         if file.token != token {
             return Err(SessionError::Rejected);
         }
-        Ok((file.clone(), Arc::clone(&active.cancelled)))
+        let authorized = (file.clone(), Arc::clone(&active.cancelled));
+        active.last_activity = Instant::now();
+        Ok(authorized)
+    }
+
+    /// Records how far one file has got. Returns the session's progress as
+    /// (bytes done, bytes expected) so the UI can draw a single arc.
+    pub fn record_progress(
+        &self,
+        session_id: &str,
+        file_id: &str,
+        bytes: u64,
+    ) -> Option<(u64, u64)> {
+        let mut inner = self.lock();
+        let active = inner.active.as_mut()?;
+        if active.id != session_id {
+            return None;
+        }
+        active.received.insert(file_id.to_string(), bytes);
+        Some((active.received.values().sum(), active.total_bytes()))
     }
 
     /// Records a finished file. Returns the saved paths once the whole
@@ -204,6 +265,7 @@ impl SessionManager {
         }
         active.completed.insert(file_id.to_string());
         active.saved_paths.push(saved_path);
+        active.last_activity = Instant::now();
         if !active.is_finished() {
             return None;
         }
@@ -262,6 +324,8 @@ pub fn build_active_session(
         cancelled: Arc::new(AtomicBool::new(false)),
         completed: HashSet::new(),
         saved_paths: Vec::new(),
+        received: HashMap::new(),
+        last_activity: Instant::now(),
     }
 }
 
@@ -414,6 +478,34 @@ mod tests {
         assert!(cancelled.load(Ordering::SeqCst));
         assert!(!manager.is_busy());
         assert!(!manager.cancel("s1"));
+    }
+
+    #[test]
+    fn progress_covers_the_whole_session_not_one_file() {
+        let manager = SessionManager::new();
+        activate_with(&manager, &["a", "b"]);
+        // Each test file is 10 bytes, so the session expects 20.
+        assert_eq!(manager.record_progress("s1", "a", 4), Some((4, 20)));
+        assert_eq!(manager.record_progress("s1", "b", 6), Some((10, 20)));
+        assert_eq!(manager.record_progress("s1", "a", 10), Some((16, 20)));
+        assert_eq!(manager.record_progress("other", "a", 1), None);
+    }
+
+    #[test]
+    fn an_abandoned_session_stops_blocking_the_receiver() {
+        let manager = SessionManager::new();
+        activate_with(&manager, &["a"]);
+        // Still fresh: a new sender has to wait.
+        assert_eq!(
+            manager.begin_with_timeout("s2", Duration::from_secs(60)).unwrap_err(),
+            SessionError::Busy
+        );
+        // Once it has gone quiet, the slot is taken over.
+        let (_, cancelled) = manager.authorize_upload("s1", "a", "tok", peer()).unwrap();
+        assert!(manager
+            .begin_with_timeout("s2", Duration::from_millis(0))
+            .is_ok());
+        assert!(cancelled.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

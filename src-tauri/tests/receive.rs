@@ -115,7 +115,7 @@ async fn harness(settings: Settings) -> Harness {
     let events: Events = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&events);
     let state = Arc::new(ServerState {
-        info: DeviceInfo {
+        info: Arc::new(Mutex::new(DeviceInfo {
             alias: "Test Receiver".into(),
             version: PROTOCOL_VERSION.into(),
             device_model: Some("macOS".into()),
@@ -124,7 +124,7 @@ async fn harness(settings: Settings) -> Harness {
             port: 53317,
             protocol: ProtocolType::Https,
             download: false,
-        },
+        })),
         sessions: Arc::new(SessionManager::new()),
         settings: Arc::new(Mutex::new(settings)),
         download_dir: download_dir.clone(),

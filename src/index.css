@@ -1,5 +1,28 @@
 @import "tailwindcss";
 
+:root {
+  --bg: #f5f7fa;
+  --fg: #0b0f14;
+  --muted: rgba(11, 15, 20, 0.58);
+  --ring: rgba(11, 15, 20, 0.18);
+  --surface: #ffffff;
+  --shadow: rgba(11, 15, 20, 0.12);
+  --accent: #3b82f6;
+  --ok: #22c55e;
+  --bad: #ef4444;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b0f14;
+    --fg: #f5f7fa;
+    --muted: rgba(245, 247, 250, 0.62);
+    --ring: rgba(245, 247, 250, 0.22);
+    --surface: #18202a;
+    --shadow: rgba(0, 0, 0, 0.55);
+  }
+}
+
 html,
 body,
 #root {
@@ -12,7 +35,123 @@ body,
 }
 
 body {
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+input {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Three rings leaving the centre circle and fading out at the window edge. */
+@keyframes pulse {
+  from {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  to {
+    transform: scale(var(--pulse-scale, 5));
+    opacity: 0;
+  }
+}
+
+.pulse {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  transform-box: view-box;
+  transform-origin: center;
+  animation: pulse 2.4s linear infinite;
+}
+
+/* Cheap when the window is in the background, and less distracting. */
+body.unfocused .pulse {
+  animation-play-state: paused;
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+.device-appear {
+  animation: appear 200ms ease-out both;
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translate(-50%, -50%);
+  }
+  20% {
+    transform: translate(calc(-50% - 6px), -50%);
+  }
+  40% {
+    transform: translate(calc(-50% + 6px), -50%);
+  }
+  60% {
+    transform: translate(calc(-50% - 4px), -50%);
+  }
+  80% {
+    transform: translate(calc(-50% + 4px), -50%);
+  }
+}
+
+.shake {
+  animation: shake 400ms ease-in-out;
+}
+
+@keyframes flash-ok {
+  0%,
+  100% {
+    stroke: var(--ring);
+  }
+  30%,
+  70% {
+    stroke: var(--ok);
+  }
+}
+
+@keyframes flash-bad {
+  0%,
+  100% {
+    stroke: var(--ring);
+  }
+  30%,
+  70% {
+    stroke: var(--bad);
+  }
+}
+
+.flash-ok {
+  animation: flash-ok 900ms ease-in-out;
+}
+
+.flash-bad {
+  animation: flash-bad 900ms ease-in-out;
+}
+
+@keyframes card-up {
+  from {
+    opacity: 0;
+    transform: translateY(120%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.card-up {
+  animation: card-up 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }

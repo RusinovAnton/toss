@@ -36,6 +36,10 @@ cd src-tauri && cargo test         # Rust unit tests
 - `src/App.tsx` — root component (radar UI lives here later)
 - `src/lib/` — pure TS helpers (formatting, geometry); unit-tested
 - `src/lib/tauri.ts` — typed wrappers for every Tauri command / event
+- `src/lib/radar.ts` — orbit geometry and drag hit testing; unit-tested
+- `src/lib/device.ts` — device emoji and OS guessing; unit-tested
+- `src/lib/preview.ts` — dev-only sample data, see Previewing the UI below
+- `src/components/` — the radar: circles, pulses, cards, settings
 - `src-tauri/src/lib.rs` — Tauri builder, `AppState`, command registration
 - `src-tauri/src/identity.rs` — alias, rcgen cert, fingerprint, `identity.json` persistence
 - `src-tauri/src/protocol.rs` — LocalSend v2 wire types (announce, register request/response)
@@ -45,6 +49,7 @@ cd src-tauri && cargo test         # Rust unit tests
 - `src-tauri/src/session.rs` — one-at-a-time receive session, tokens, accept/decline
 - `src-tauri/src/files.rs` — file name validation and collision suffixes
 - `src-tauri/src/settings.rs` — `settings.json` (PIN, Quick Save)
+- `src-tauri/src/window.rs` — remembered geometry and the square-window rule
 - `src-tauri/tests/receive.rs` — the receive routes end to end over plain HTTP
 - `src-tauri/tests/send.rs` — the sender driven against our own receive router
 - `src-tauri/tests/live_send.rs` — ignored by default; sends to a real peer on the network
@@ -94,6 +99,36 @@ To try a real send by hand:
 TOSS_TARGET=192.168.1.5:53317 TOSS_SEND=/path/to/folder cargo test --test live_send -- --ignored --nocapture
 ```
 
+## The radar
+
+One window, no chrome. This device sits in the middle with blue rings pulsing outward; peers orbit
+it, eight to a ring, first one at twelve o'clock and clockwise from there. The rings pause while
+the window is in the background.
+
+- **Sending**: drag files or folders onto a circle. It grows and its ring turns blue while you
+  hover, and the drop starts the transfer with no confirmation. Dropping on empty space shakes the
+  centre. Clicking the centre opens a file picker; with one peer around it sends straight away,
+  otherwise the next circle you click gets the files.
+- **Progress** is one arc per circle covering the whole session, not one file, with a percentage
+  where the name usually is. Green flash on success, red flash plus a one-word reason otherwise.
+- **Receiving**: a card slides up from the bottom. Enter accepts, Escape denies, and the receiver
+  declines by itself after a minute. Quick Save skips the card. When it lands, the card offers
+  "Show" to reveal the files in Finder.
+- **Settings** live behind the gear: name, PIN, Quick Save. Nothing else in v1.
+- The window is always square, at least 360px, and remembers where it was. Geometry is written at
+  most every two seconds while dragging, so a crash still leaves a recent position behind.
+
+### Previewing the UI
+
+`pnpm dev` on its own has no backend, so the radar fills itself with sample devices. Handy for
+design work in a normal browser:
+
+```bash
+pnpm dev     # then open http://localhost:1420/?card  (or ?saved, ?settings)
+```
+
+This only happens in a dev build outside Tauri, so the packaged app never shows it.
+
 ## Rules
 
 - All network I/O and filesystem access in Rust. Frontend only calls Tauri
@@ -117,6 +152,8 @@ TOSS_TARGET=192.168.1.5:53317 TOSS_SEND=/path/to/folder cargo test --test live_s
 | `download_dir` | — | `string` | Where received files land. Not configurable in v1 |
 | `send_files` | `deviceId`, `paths`, `pin?` | `{ sessionId, filesSent, bytesSent }` | Resolves when every accepted file is uploaded. Folders are walked |
 | `cancel_send` | `sessionId` | — | Aborts an in-flight send and tells the peer |
+| `set_alias` | `alias` | `IdentityInfo` | Renames this device and re-announces at once |
+| `show_in_folder` | `path` | — | Reveals a received file in Finder or Explorer |
 
 `send_files` rejects with `{ code, message }`. Codes: `declined`, `busy`, `pin-required`,
 `cancelled`, `connection-lost`, `no-files`, `too-many-requests`, `io-error`, `protocol-error`,
@@ -188,5 +225,5 @@ Facts verified against the protocol repo and official app source (`packages/core
 - [x] Phase 2 — Discovery
 - [x] Phase 3 — Receive
 - [x] Phase 4 — Send
-- [ ] Phase 5 — UI (radar)
+- [x] Phase 5 — UI (radar)
 - [ ] Phase 6 — Packaging

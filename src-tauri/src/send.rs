@@ -6,7 +6,7 @@
 //! which is how the protocol preserves structure.
 
 use crate::protocol::{
-    DeviceInfo, FileDto, PrepareUploadRequest, PrepareUploadResponse, ProtocolType,
+    read_info, FileDto, PrepareUploadRequest, PrepareUploadResponse, ProtocolType, SharedInfo,
 };
 use crate::server::{Emitter, SESSION_FINISHED_EVENT, TRANSFER_PROGRESS_EVENT};
 use futures_util::stream;
@@ -34,6 +34,8 @@ const MAX_FILES: usize = 10_000;
 /// A peer to send to.
 #[derive(Clone, Debug)]
 pub struct Target {
+    /// The peer's fingerprint, echoed in events so the UI can find its circle.
+    pub fingerprint: String,
     pub ip: String,
     pub port: u16,
     pub protocol: ProtocolType,
@@ -154,14 +156,14 @@ struct ActiveSend {
 
 pub struct SendManager {
     client: reqwest::Client,
-    info: DeviceInfo,
+    info: SharedInfo,
     emit: Emitter,
     active: Mutex<HashMap<String, ActiveSend>>,
 }
 
 impl SendManager {
     pub fn new(
-        info: DeviceInfo,
+        info: SharedInfo,
         cert_pem: &str,
         key_pem: &str,
         emit: Emitter,
@@ -194,13 +196,26 @@ impl SendManager {
         paths: &[PathBuf],
         pin: Option<String>,
     ) -> Result<SendSummary, SendError> {
+        self.send_with_flag(target, paths, pin, Arc::new(AtomicBool::new(false)))
+            .await
+    }
+
+    /// [`SendManager::send`] with a cancellation flag the caller owns, for
+    /// callers that need to stop the transfer without going through
+    /// [`SendManager::cancel`] and its session id.
+    pub async fn send_with_flag(
+        &self,
+        target: Target,
+        paths: &[PathBuf],
+        pin: Option<String>,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<SendSummary, SendError> {
         let files = collect_files(paths)?;
         if files.is_empty() {
             return Err(SendError::NoFiles);
         }
 
         let prepared = self.prepare(&target, &files, pin.as_deref()).await?;
-        let cancelled = Arc::new(AtomicBool::new(false));
         self.active.lock().expect("sends poisoned").insert(
             prepared.session_id.clone(),
             ActiveSend {
@@ -225,6 +240,7 @@ impl SendManager {
                         "sessionId": prepared.session_id,
                         "status": "completed",
                         "direction": "send",
+                        "peer": target.fingerprint,
                     }),
                 );
                 Ok(SendSummary {
@@ -240,6 +256,7 @@ impl SendManager {
                         "sessionId": prepared.session_id,
                         "status": if matches!(error, SendError::Cancelled) { "cancelled" } else { "error" },
                         "direction": "send",
+                        "peer": target.fingerprint,
                         "reason": error.code(),
                     }),
                 );
@@ -260,7 +277,7 @@ impl SendManager {
             url.push_str(&format!("?pin={pin}"));
         }
         let request = PrepareUploadRequest {
-            info: self.info.clone(),
+            info: read_info(&self.info),
             files: files
                 .iter()
                 .map(|file| (file.id.clone(), file.to_dto()))
@@ -304,6 +321,12 @@ impl SendManager {
     ) -> Result<u64, SendError> {
         let by_id: HashMap<&str, &OutgoingFile> =
             files.iter().map(|f| (f.id.as_str(), f)).collect();
+        // What the arc on the target's circle is scaled to.
+        let session_total: u64 = prepared
+            .files
+            .keys()
+            .filter_map(|id| by_id.get(id.as_str()).map(|file| file.size))
+            .sum();
         let mut bytes_sent = 0u64;
 
         for (file_id, token) in &prepared.files {
@@ -314,8 +337,16 @@ impl SendManager {
             if cancelled.load(Ordering::SeqCst) {
                 return Err(SendError::Cancelled);
             }
-            self.upload_one(target, &prepared.session_id, file, token, cancelled)
-                .await?;
+            self.upload_one(
+                target,
+                &prepared.session_id,
+                file,
+                token,
+                cancelled,
+                bytes_sent,
+                session_total,
+            )
+            .await?;
             bytes_sent += file.size;
         }
         Ok(bytes_sent)
@@ -328,12 +359,15 @@ impl SendManager {
         file: &OutgoingFile,
         token: &str,
         cancelled: &Arc<AtomicBool>,
+        already_sent: u64,
+        session_total: u64,
     ) -> Result<(), SendError> {
         let handle = tokio::fs::File::open(&file.path)
             .await
             .map_err(|e| SendError::Io(e.to_string()))?;
 
         let emit = Arc::clone(&self.emit);
+        let peer = target.fingerprint.clone();
         let session = session_id.to_string();
         let file_id = file.id.clone();
         let file_name = file.file_name.clone();
@@ -344,6 +378,7 @@ impl SendManager {
             (handle, 0u64, Instant::now() - PROGRESS_INTERVAL, None::<u64>),
             move |(mut handle, sent, last_emit, last_sent)| {
                 let emit = Arc::clone(&emit);
+                let peer = peer.clone();
                 let session = session.clone();
                 let file_id = file_id.clone();
                 let file_name = file_name.clone();
@@ -373,7 +408,10 @@ impl SendManager {
                                             "fileName": file_name,
                                             "bytesReceived": sent,
                                             "totalBytes": total,
+                                            "sessionDone": already_sent + sent,
+                                            "sessionTotal": session_total,
                                             "direction": "send",
+                                            "peer": peer,
                                         }),
                                     );
                                     (Instant::now(), Some(sent))
@@ -420,7 +458,10 @@ impl SendManager {
                         "fileName": file.file_name,
                         "bytesReceived": file.size,
                         "totalBytes": file.size,
+                        "sessionDone": already_sent + file.size,
+                        "sessionTotal": session_total,
                         "direction": "send",
+                        "peer": target.fingerprint,
                     }),
                 );
                 Ok(())

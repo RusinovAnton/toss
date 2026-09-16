@@ -7,6 +7,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::sync::{Arc, Mutex};
+
+/// This device's info, shared by discovery, the server and the sender.
+/// Behind a lock because the alias is editable at runtime.
+pub type SharedInfo = Arc<Mutex<DeviceInfo>>;
+
+/// Reads the current device info. Never held across an await.
+pub fn read_info(info: &SharedInfo) -> DeviceInfo {
+    info.lock().expect("device info poisoned").clone()
+}
 
 /// Protocol version we announce. 2.2 is what app 1.18+ speaks.
 pub const PROTOCOL_VERSION: &str = "2.2";

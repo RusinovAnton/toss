@@ -25,7 +25,7 @@ async fn send_to_a_real_peer() {
     let events = Arc::new(Mutex::new(0usize));
     let counter = Arc::clone(&events);
     let sender = SendManager::new(
-        identity.to_device_info(),
+        Arc::new(Mutex::new(identity.to_device_info())),
         &identity.certificate_pem,
         &identity.private_key_pem,
         Arc::new(move |event, payload| {
@@ -39,6 +39,7 @@ async fn send_to_a_real_peer() {
     .unwrap();
 
     let target = Target {
+        fingerprint: std::env::var("TOSS_PEER").unwrap_or_else(|_| "unknown".into()),
         ip: ip.to_string(),
         port: port.parse().expect("port must be a number"),
         protocol: ProtocolType::Https,

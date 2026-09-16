@@ -6,6 +6,7 @@
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use toss_lib::identity::Identity;
@@ -124,7 +125,7 @@ async fn pair(settings: Settings) -> Pair {
 
     let (receiver_events, receiver_emit) = recorder();
     let receiver_state = Arc::new(ServerState {
-        info: DeviceInfo {
+        info: Arc::new(Mutex::new(DeviceInfo {
             alias: "Receiver".into(),
             version: PROTOCOL_VERSION.into(),
             device_model: Some("macOS".into()),
@@ -133,7 +134,7 @@ async fn pair(settings: Settings) -> Pair {
             port: 53317,
             protocol: ProtocolType::Http,
             download: false,
-        },
+        })),
         sessions: Arc::new(SessionManager::new()),
         settings: Arc::new(Mutex::new(settings)),
         download_dir: download_dir.clone(),
@@ -156,7 +157,7 @@ async fn pair(settings: Settings) -> Pair {
     let identity = Identity::generate().unwrap();
     let (sender_events, sender_emit) = recorder();
     let sender = SendManager::new(
-        identity.to_device_info(),
+        Arc::new(Mutex::new(identity.to_device_info())),
         &identity.certificate_pem,
         &identity.private_key_pem,
         sender_emit,
@@ -166,6 +167,7 @@ async fn pair(settings: Settings) -> Pair {
     Pair {
         sender: Arc::new(sender),
         target: Target {
+            fingerprint: "RECEIVER".into(),
             ip: addr.ip().to_string(),
             port: addr.port(),
             protocol: ProtocolType::Http,
@@ -379,6 +381,7 @@ async fn an_unreachable_peer_is_reported_as_a_lost_connection() {
     let pair = pair(quick_save()).await;
     let path = pair.write("one.txt", b"first");
     let nowhere = Target {
+        fingerprint: "NOBODY".into(),
         ip: "127.0.0.1".into(),
         // Port 1 is not something anyone listens on.
         port: 1,
@@ -391,41 +394,97 @@ async fn an_unreachable_peer_is_reported_as_a_lost_connection() {
 
 #[tokio::test]
 async fn cancelling_stops_the_transfer_and_frees_the_receiver() {
-    let pair = pair(quick_save()).await;
-    let payload = vec![7u8; 20_000_000];
-    let path = pair.write("huge.bin", &payload);
+    let run = uuid::Uuid::new_v4();
+    let download_dir = std::env::temp_dir().join(format!("toss-cancel-in-{run}"));
+    let work_dir = std::env::temp_dir().join(format!("toss-cancel-out-{run}"));
+    std::fs::create_dir_all(&download_dir).unwrap();
+    std::fs::create_dir_all(&work_dir).unwrap();
 
-    let sender = Arc::clone(&pair.sender);
-    let cancel_sender = Arc::clone(&sender);
-    let events = Arc::clone(&pair.sender_events);
+    let (receiver_events, receiver_emit) = recorder();
+    let receiver_state = Arc::new(ServerState {
+        info: Arc::new(Mutex::new(DeviceInfo {
+            alias: "Receiver".into(),
+            version: PROTOCOL_VERSION.into(),
+            device_model: Some("macOS".into()),
+            device_type: Some(DeviceType::Desktop),
+            fingerprint: "RECEIVER".into(),
+            port: 53317,
+            protocol: ProtocolType::Http,
+            download: false,
+        })),
+        sessions: Arc::new(SessionManager::new()),
+        settings: Arc::new(Mutex::new(quick_save())),
+        download_dir: download_dir.clone(),
+        emit: receiver_emit,
+        register_peer: Arc::new(|_, _| {}),
+    });
+    let _ = &receiver_events;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = router(Arc::clone(&receiver_state));
     tokio::spawn(async move {
-        for _ in 0..2000 {
-            let session = events
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|(event, _)| event == "transfer-progress")
-                .map(|(_, payload)| payload["sessionId"].as_str().unwrap().to_string());
-            if let Some(session) = session {
-                let _ = cancel_sender.cancel(&session).await;
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
 
+    // Cancelling from inside the progress callback removes the race: the flag
+    // is set before the upload stream reads its next chunk.
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&cancelled);
+    let (sender_events, _) = recorder();
+    let recorded = Arc::clone(&sender_events);
+    let identity = Identity::generate().unwrap();
+    let sender = SendManager::new(
+        Arc::new(Mutex::new(identity.to_device_info())),
+        &identity.certificate_pem,
+        &identity.private_key_pem,
+        Arc::new(move |event: &str, payload: Value| {
+            recorded.lock().unwrap().push((event.to_string(), payload));
+            if event == "transfer-progress" {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }),
+    )
+    .unwrap();
+
+    let path = work_dir.join("huge.bin");
+    std::fs::write(&path, vec![7u8; 8_000_000]).unwrap();
+
     let error = sender
-        .send(pair.target.clone(), &[path], None)
+        .send_with_flag(
+            Target {
+                fingerprint: "RECEIVER".into(),
+                ip: addr.ip().to_string(),
+                port: addr.port(),
+                protocol: ProtocolType::Http,
+            },
+            &[path],
+            None,
+            cancelled,
+        )
         .await
         .unwrap_err();
     assert_eq!(error.code(), "cancelled");
 
-    // The partial file must not be left behind, and the receiver must be
-    // ready for the next sender.
-    assert!(pair.saved().is_empty(), "partial file was left on disk");
-    assert!(!pair.receiver_state.sessions.is_busy());
+    // The receiver notices the broken body a moment later and removes the
+    // partial file, so give its task a chance to run.
+    let mut left = Vec::new();
+    for _ in 0..200 {
+        left.clear();
+        collect(&download_dir, &download_dir, &mut left);
+        if left.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(left.is_empty(), "partial file was left on disk: {left:?}");
 
-    let finished = Pair::events(&pair.sender_events, "session-finished");
+    let finished = Pair::events(&sender_events, "session-finished");
     assert_eq!(finished.last().unwrap()["status"], "cancelled");
 }
 

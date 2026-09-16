@@ -31,6 +31,16 @@ export function getIdentity(): Promise<IdentityInfo> {
   return invoke<IdentityInfo>("get_identity");
 }
 
+/** Renames this device and tells peers straight away. */
+export function setAlias(alias: string): Promise<IdentityInfo> {
+  return invoke<IdentityInfo>("set_alias", { alias });
+}
+
+/** Reveals a received file in Finder or Explorer. */
+export function showInFolder(path: string): Promise<void> {
+  return invoke("show_in_folder", { path });
+}
+
 export function listDevices(): Promise<Device[]> {
   return invoke<Device[]>("list_devices");
 }
@@ -70,12 +80,20 @@ export interface TransferProgress {
   fileName: string;
   bytesReceived: number;
   totalBytes: number;
+  /** Progress across the whole session, which is what the arc shows. */
+  sessionDone: number;
+  sessionTotal: number;
   direction: "receive" | "send";
+  /** Fingerprint of the device on the other end, or null if it went away. */
+  peer: string | null;
 }
 
 export interface SessionFinished {
   sessionId: string;
-  status: "completed" | "cancelled" | "declined";
+  status: "completed" | "cancelled" | "declined" | "error";
+  direction?: "receive" | "send";
+  peer?: string | null;
+  reason?: string;
   savedTo?: string;
   files?: string[];
 }

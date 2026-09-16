@@ -1,57 +1,164 @@
-import { useEffect, useState } from "react";
-import { formatBytes } from "./lib/format";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { CenterCircle } from "./components/CenterCircle";
+import { DeviceCircle, type Transfer } from "./components/DeviceCircle";
+import { IncomingCard, SavedCard } from "./components/IncomingCard";
+import { Pulses } from "./components/Pulses";
+import { SettingsPanel } from "./components/SettingsPanel";
 import {
-  cancelSend,
+  isPreview,
+  previewFlag,
+  PREVIEW_DEVICES,
+  PREVIEW_IDENTITY,
+  PREVIEW_REQUEST,
+} from "./lib/preview";
+import { hitTest, placeDevices } from "./lib/radar";
+import {
   getIdentity,
+  getSettings,
   listDevices,
   onDevicesChanged,
   onIncomingRequest,
   onSessionFinished,
   onTransferProgress,
-  rescan,
   respondToRequest,
   sendFiles,
+  setAlias as setAliasCommand,
+  setSettings as setSettingsCommand,
+  showInFolder,
   type Device,
   type IdentityInfo,
   type IncomingRequest,
-  type TransferProgress,
+  type Settings,
 } from "./lib/tauri";
 
-// Placeholder shell. Phase 5 replaces all of this with the radar.
+const IDLE: Transfer = { phase: "idle", progress: 0 };
+/** How long a green or red ring stays before the circle goes back to normal. */
+const FLASH_MS = 900;
+const ERROR_MS = 2600;
+/** The receiver declines by itself after a minute; the card follows suit. */
+const REQUEST_TIMEOUT_MS = 60_000;
+const SAVED_NOTICE_MS = 5000;
+
+const REASONS: Record<string, string> = {
+  declined: "Declined",
+  busy: "Busy",
+  "connection-lost": "Connection lost",
+  cancelled: "Cancelled",
+  "pin-required": "PIN needed",
+  "unknown-device": "Gone",
+  "no-files": "Nothing to send",
+};
+
 export default function App() {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
-  const [scanning, setScanning] = useState(false);
-  const [request, setRequest] = useState<IncomingRequest | null>(null);
-  const [progress, setProgress] = useState<TransferProgress | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-  const [paths, setPaths] = useState("");
-  const [sendingTo, setSendingTo] = useState<string | null>(null);
-  const [session, setSession] = useState<string | null>(null);
+  const [settings, setSettings] = useState<Settings>({ pin: null, quickSave: false });
+  const [size, setSize] = useState(() => Math.min(window.innerWidth, window.innerHeight));
+  const [transfers, setTransfers] = useState<Record<string, Transfer>>({});
+  const [incoming, setIncoming] = useState<IncomingRequest | null>(() =>
+    previewFlag("card") ? PREVIEW_REQUEST : null,
+  );
+  const [saved, setSaved] = useState<string[] | null>(() =>
+    previewFlag("saved") ? ["/Users/me/Downloads/holiday.zip"] : null,
+  );
+  const [hovered, setHovered] = useState(-1);
+  const [pending, setPending] = useState<string[] | null>(null);
+  const [shaking, setShaking] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(() => previewFlag("settings"));
 
+  const placements = useMemo(() => placeDevices(devices.length, size), [devices.length, size]);
+  // Drag events arrive outside React, so the hit test reads the latest
+  // placements through a ref rather than a stale closure.
+  const placementsRef = useRef(placements);
+  placementsRef.current = placements;
+  const devicesRef = useRef(devices);
+  devicesRef.current = devices;
+
+  const setTransfer = useCallback((peer: string, transfer: Transfer) => {
+    setTransfers((current) => ({ ...current, [peer]: transfer }));
+  }, []);
+
+  const clearTransferLater = useCallback((peer: string, delay: number) => {
+    window.setTimeout(() => {
+      setTransfers((current) => {
+        const { [peer]: _dropped, ...rest } = current;
+        return rest;
+      });
+    }, delay);
+  }, []);
+
+  const send = useCallback(
+    async (fingerprint: string, paths: string[], pin?: string) => {
+      if (paths.length === 0) return;
+      setTransfer(fingerprint, { phase: "active", progress: 0 });
+      try {
+        await sendFiles(fingerprint, paths, pin);
+      } catch (error) {
+        const failure = error as { code?: string; message?: string };
+        if (failure.code === "pin-required" && pin === undefined) {
+          const entered = window.prompt("That device asks for a PIN");
+          if (entered) {
+            await send(fingerprint, paths, entered);
+            return;
+          }
+        }
+        setTransfer(fingerprint, {
+          phase: "error",
+          progress: 0,
+          message: REASONS[failure.code ?? ""] ?? "Failed",
+        });
+        clearTransferLater(fingerprint, ERROR_MS);
+      }
+    },
+    [clearTransferLater, setTransfer],
+  );
+
+  // Live data and events.
   useEffect(() => {
+    if (isPreview()) {
+      setIdentity(PREVIEW_IDENTITY);
+      setDevices(PREVIEW_DEVICES);
+      setTransfer(PREVIEW_DEVICES[1].fingerprint, { phase: "active", progress: 0.42 });
+      return;
+    }
     getIdentity().then(setIdentity).catch(console.error);
     listDevices().then(setDevices).catch(console.error);
+    getSettings().then(setSettings).catch(console.error);
+
     const unlisteners = [
       onDevicesChanged(setDevices),
-      onIncomingRequest((incoming) => {
-        setRequest(incoming);
-        setStatus(null);
-      }),
+      onIncomingRequest(setIncoming),
       onTransferProgress((update) => {
-        setProgress(update);
-        if (update.direction === "send") setSession(update.sessionId);
+        if (!update.peer) return;
+        const total = Math.max(update.sessionTotal, 1);
+        setTransfer(update.peer, {
+          phase: "active",
+          progress: Math.min(update.sessionDone / total, 1),
+        });
       }),
       onSessionFinished((finished) => {
-        setRequest(null);
-        setProgress(null);
-        setStatus(
-          finished.status === "completed"
-            ? "Saved to Downloads"
-            : finished.status === "cancelled"
-              ? "Cancelled"
-              : "Declined",
+        setIncoming((current) =>
+          current?.sessionId === finished.sessionId ? null : current,
         );
+        if (finished.peer) {
+          if (finished.status === "completed") {
+            setTransfer(finished.peer, { phase: "done", progress: 1 });
+            clearTransferLater(finished.peer, FLASH_MS);
+          } else {
+            setTransfer(finished.peer, {
+              phase: "error",
+              progress: 0,
+              message: REASONS[finished.reason ?? finished.status] ?? "Failed",
+            });
+            clearTransferLater(finished.peer, ERROR_MS);
+          }
+        }
+        if (finished.direction === "receive" && finished.status === "completed") {
+          setSaved(finished.files ?? []);
+        }
       }),
     ];
     return () => {
@@ -59,150 +166,177 @@ export default function App() {
         unlisten.then((fn) => fn()).catch(console.error);
       }
     };
+  }, [clearTransferLater, setTransfer]);
+
+  // The window is square, so one number describes it.
+  useEffect(() => {
+    const onResize = () => setSize(Math.min(window.innerWidth, window.innerHeight));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  async function handleRescan() {
-    setScanning(true);
-    try {
-      setDevices(await rescan());
-    } finally {
-      setScanning(false);
-    }
-  }
+  // Pausing the rings while the window is in the background keeps it cheap.
+  useEffect(() => {
+    if (isPreview()) return;
+    const appWindow = getCurrentWindow();
+    const unlisten = appWindow.onFocusChanged(({ payload: focused }) => {
+      document.body.classList.toggle("unfocused", !focused);
+    });
+    appWindow
+      .isFocused()
+      .then((focused) => document.body.classList.toggle("unfocused", !focused))
+      .catch(() => {});
+    return () => {
+      unlisten.then((fn) => fn()).catch(console.error);
+    };
+  }, []);
 
-  /// Sends whatever is typed in the path box. Retries once with a PIN if the
-  /// peer asks for one, which is what the plan calls for.
-  async function send(deviceId: string) {
-    const list = paths
-      .split("\n")
-      .map((path) => path.trim())
-      .filter(Boolean);
-    if (list.length === 0) {
-      setStatus("Type a path to send");
-      return;
-    }
-    setSendingTo(deviceId);
-    setStatus(null);
-    try {
-      await sendFiles(deviceId, list);
-      setStatus("Sent");
-    } catch (error) {
-      const failure = error as { code?: string; message?: string };
-      if (failure.code === "pin-required") {
-        const pin = window.prompt("That device asks for a PIN");
-        if (pin) {
-          try {
-            await sendFiles(deviceId, list, pin);
-            setStatus("Sent");
-            return;
-          } catch (retry) {
-            setStatus((retry as { message?: string }).message ?? "Failed");
-            return;
-          } finally {
-            setSendingTo(null);
-            setSession(null);
-          }
-        }
+  // Files dragged in from Finder or Explorer.
+  useEffect(() => {
+    if (isPreview()) return;
+    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
+      const payload = event.payload;
+      if (payload.type === "leave") {
+        setHovered(-1);
+        return;
       }
-      setStatus(failure.message ?? "Failed");
-    } finally {
-      setSendingTo(null);
-      setSession(null);
-    }
-  }
+      const ratio = window.devicePixelRatio || 1;
+      const x = payload.position.x / ratio;
+      const y = payload.position.y / ratio;
+      const index = hitTest(placementsRef.current, x, y);
+
+      if (payload.type === "over" || payload.type === "enter") {
+        setHovered(index);
+        return;
+      }
+      if (payload.type === "drop") {
+        setHovered(-1);
+        const device = devicesRef.current[index];
+        if (index < 0 || !device) {
+          // Dropping on empty space does nothing but say so.
+          setShaking(true);
+          window.setTimeout(() => setShaking(false), 400);
+          return;
+        }
+        void send(device.fingerprint, payload.paths);
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn()).catch(console.error);
+    };
+  }, [send]);
+
+  // Enter accepts, Escape denies or backs out.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (incoming) {
+        if (event.key === "Enter") answer(true);
+        if (event.key === "Escape") answer(false);
+        return;
+      }
+      if (event.key === "Escape") {
+        setPending(null);
+        setSettingsOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // The receiver declines on its own after a minute, so the card goes too.
+  useEffect(() => {
+    if (!incoming || isPreview()) return;
+    const timer = window.setTimeout(() => setIncoming(null), REQUEST_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [incoming]);
+
+  useEffect(() => {
+    if (!saved || isPreview()) return;
+    const timer = window.setTimeout(() => setSaved(null), SAVED_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [saved]);
 
   function answer(accept: boolean) {
-    if (!request) return;
-    const ids = accept ? request.files.map((file) => file.id) : [];
-    respondToRequest(request.sessionId, ids).catch(console.error);
-    setRequest(null);
+    if (!incoming) return;
+    const ids = accept ? incoming.files.map((file) => file.id) : [];
+    respondToRequest(incoming.sessionId, ids).catch(console.error);
+    setIncoming(null);
   }
 
-  const summary = request
-    ? request.files.length === 1
-      ? request.files[0].fileName
-      : `${request.files.length} files · ${formatBytes(request.totalSize)}`
-    : null;
+  async function pickFiles() {
+    if (pending) {
+      setPending(null);
+      return;
+    }
+    const picked = await openFilePicker({ multiple: true });
+    if (!picked) return;
+    const paths = Array.isArray(picked) ? picked : [picked];
+    if (devicesRef.current.length === 1) {
+      void send(devicesRef.current[0].fingerprint, paths);
+      return;
+    }
+    // With more than one device around, the next circle clicked gets them.
+    setPending(paths);
+  }
+
+  function onDeviceClick(device: Device) {
+    if (!pending) return;
+    const paths = pending;
+    setPending(null);
+    void send(device.fingerprint, paths);
+  }
 
   return (
-    <main className="flex h-full w-full flex-col items-center gap-3 overflow-y-auto bg-[#F5F7FA] p-6 text-[#0B0F14] dark:bg-[#0B0F14] dark:text-[#F5F7FA]">
-      <h1 className="text-2xl font-medium tracking-tight">Toss</h1>
-      <p className="text-sm opacity-60">{identity?.alias ?? " "}</p>
-      <button
-        onClick={handleRescan}
-        disabled={scanning}
-        className="rounded-full border border-current/20 px-4 py-1 text-sm disabled:opacity-40"
-      >
-        {scanning ? "Scanning…" : "Scan"}
-      </button>
+    <main className="relative h-full w-full overflow-hidden" style={{ background: "var(--bg)" }}>
+      <Pulses size={size} />
 
-      <ul className="w-full space-y-1 text-sm">
-        {devices.map((device) => (
-          <li
-            key={device.fingerprint}
-            className="flex items-center justify-between gap-2 rounded-lg bg-black/5 px-3 py-2 dark:bg-white/5"
-          >
-            <span className="truncate">{device.alias}</span>
-            <span className="truncate opacity-50">
-              {device.deviceModel ?? device.deviceType} · {device.ip}
-            </span>
-            <button
-              onClick={() => send(device.fingerprint)}
-              disabled={sendingTo !== null}
-              className="shrink-0 rounded-full border border-current/20 px-3 py-0.5 text-xs disabled:opacity-40"
-            >
-              {sendingTo === device.fingerprint ? "Sending…" : "Send"}
-            </button>
-          </li>
-        ))}
-        {devices.length === 0 && (
-          <li className="text-center opacity-40">No devices yet</li>
-        )}
-      </ul>
-
-      <textarea
-        value={paths}
-        onChange={(event) => setPaths(event.target.value)}
-        placeholder="One path per line (Phase 5 replaces this with drag and drop)"
-        className="h-16 w-full rounded-lg bg-black/5 p-2 text-xs dark:bg-white/5"
+      <CenterCircle
+        identity={identity}
+        shaking={shaking}
+        armed={pending !== null}
+        onClick={() => void pickFiles()}
       />
 
-      {session && (
-        <button
-          onClick={() => cancelSend(session).catch(console.error)}
-          className="rounded-full border border-current/20 px-3 py-0.5 text-xs"
-        >
-          Cancel send
-        </button>
-      )}
+      {devices.map((device, index) => (
+        <DeviceCircle
+          key={device.fingerprint}
+          device={device}
+          placement={placements[index]}
+          transfer={transfers[device.fingerprint] ?? IDLE}
+          hovered={hovered === index}
+          armed={pending !== null}
+          onClick={() => onDeviceClick(device)}
+        />
+      ))}
 
-      {progress && (
-        <p className="text-xs opacity-60">
-          {progress.fileName} ·{" "}
-          {Math.round((progress.bytesReceived / Math.max(progress.totalBytes, 1)) * 100)}%
-        </p>
-      )}
-      {status && <p className="text-xs opacity-60">{status}</p>}
-
-      {request && (
-        <div className="fixed inset-x-4 bottom-4 rounded-2xl bg-white p-4 shadow-lg dark:bg-[#151B23]">
-          <p className="text-sm font-medium">{request.sender.alias}</p>
-          <p className="text-xs opacity-60">{summary}</p>
-          <div className="mt-3 flex gap-2">
-            <button
-              onClick={() => answer(true)}
-              className="flex-1 rounded-full bg-[#3B82F6] px-4 py-1.5 text-sm text-white"
-            >
-              Accept
-            </button>
-            <button
-              onClick={() => answer(false)}
-              className="flex-1 rounded-full border border-current/20 px-4 py-1.5 text-sm"
-            >
-              Deny
-            </button>
-          </div>
-        </div>
+      {incoming ? (
+        <IncomingCard
+          request={incoming}
+          onAccept={() => answer(true)}
+          onDeny={() => answer(false)}
+        />
+      ) : saved ? (
+        <SavedCard
+          onShow={() => {
+            if (saved[0]) showInFolder(saved[0]).catch(console.error);
+            setSaved(null);
+          }}
+          onDismiss={() => setSaved(null)}
+        />
+      ) : (
+        <SettingsPanel
+          open={settingsOpen}
+          alias={identity?.alias ?? ""}
+          settings={settings}
+          onToggle={() => setSettingsOpen((open) => !open)}
+          onAlias={(alias) => {
+            setAliasCommand(alias).then(setIdentity).catch(console.error);
+          }}
+          onSettings={(next) => {
+            setSettings(next);
+            setSettingsCommand(next).then(setSettings).catch(console.error);
+          }}
+        />
       )}
     </main>
   );

@@ -1,0 +1,122 @@
+import { deviceEmoji, osFromModel } from "../lib/device";
+import { DEVICE_DIAMETER, type Placement } from "../lib/radar";
+import type { Device } from "../lib/tauri";
+import { OsBadge } from "./OsBadge";
+
+/** What the ring around a circle is saying right now. */
+export type TransferPhase = "idle" | "active" | "done" | "error";
+
+export interface Transfer {
+  phase: TransferPhase;
+  /** 0 to 1, across the whole session rather than one file. */
+  progress: number;
+  /** One line shown under the circle when something went wrong. */
+  message?: string;
+}
+
+const ARC_RADIUS = DEVICE_DIAMETER / 2 + 2;
+const ARC_BOX = (ARC_RADIUS + 3) * 2;
+const CIRCUMFERENCE = 2 * Math.PI * ARC_RADIUS;
+
+export function DeviceCircle({
+  device,
+  placement,
+  transfer,
+  hovered,
+  armed,
+  onClick,
+}: {
+  device: Device;
+  placement: Placement;
+  transfer: Transfer;
+  /** Files are being dragged over this circle. */
+  hovered: boolean;
+  /** Waiting for a target after the file picker. */
+  armed: boolean;
+  onClick: () => void;
+}) {
+  const active = transfer.phase === "active";
+  const percentage = Math.round(transfer.progress * 100);
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="device-appear absolute flex flex-col items-center outline-none"
+      style={{
+        left: placement.x,
+        top: placement.y,
+        transform: `translate(-50%, -50%) scale(${hovered ? 1.15 : 1})`,
+        transition: "left 300ms ease, top 300ms ease, transform 200ms ease",
+      }}
+      title={device.deviceModel ?? device.deviceType}
+    >
+      <span
+        className="relative flex items-center justify-center rounded-full"
+        style={{
+          width: DEVICE_DIAMETER,
+          height: DEVICE_DIAMETER,
+          background: "var(--surface)",
+          boxShadow: `0 2px 10px var(--shadow)`,
+        }}
+      >
+        <svg
+          className="pointer-events-none absolute"
+          width={ARC_BOX}
+          height={ARC_BOX}
+          viewBox={`0 0 ${ARC_BOX} ${ARC_BOX}`}
+        >
+          {/* The resting ring, or the solid blue one while dragging. */}
+          <circle
+            cx={ARC_BOX / 2}
+            cy={ARC_BOX / 2}
+            r={ARC_RADIUS}
+            fill="none"
+            strokeWidth={hovered || armed ? 2 : 1}
+            className={
+              transfer.phase === "done"
+                ? "flash-ok"
+                : transfer.phase === "error"
+                  ? "flash-bad"
+                  : undefined
+            }
+            style={{
+              stroke: hovered || armed ? "var(--accent)" : "var(--ring)",
+              transition: "stroke 150ms ease",
+            }}
+          />
+          {/* The progress arc, filling clockwise from twelve o'clock. */}
+          {active && (
+            <circle
+              cx={ARC_BOX / 2}
+              cy={ARC_BOX / 2}
+              r={ARC_RADIUS}
+              fill="none"
+              stroke="var(--accent)"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeDasharray={CIRCUMFERENCE}
+              strokeDashoffset={CIRCUMFERENCE * (1 - transfer.progress)}
+              transform={`rotate(-90 ${ARC_BOX / 2} ${ARC_BOX / 2})`}
+              style={{ transition: "stroke-dashoffset 120ms linear" }}
+            />
+          )}
+        </svg>
+        <span className="text-2xl leading-none">{deviceEmoji(device.deviceType)}</span>
+        <OsBadge os={osFromModel(device.deviceModel)} />
+      </span>
+
+      <span
+        className="mt-1.5 max-w-[104px] truncate text-[11px] leading-tight"
+        style={{ color: active ? "var(--fg)" : "var(--muted)" }}
+      >
+        {active ? `${percentage}%` : device.alias}
+      </span>
+      {transfer.phase === "error" && transfer.message && (
+        <span className="text-[10px] leading-tight" style={{ color: "var(--bad)" }}>
+          {transfer.message}
+        </span>
+      )}
+    </button>
+  );
+}

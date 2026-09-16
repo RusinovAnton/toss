@@ -13,7 +13,8 @@
 
 use crate::files::{candidate_name, is_inside, safe_relative_path};
 use crate::protocol::{
-    DeviceInfo, FileDto, PrepareUploadRequest, PrepareUploadResponse, DEFAULT_PORT,
+    read_info, DeviceInfo, FileDto, PrepareUploadRequest, PrepareUploadResponse, SharedInfo,
+    DEFAULT_PORT,
 };
 use crate::session::{
     build_active_session, Decision, IncomingFile, Sender as PeerSender, SessionError,
@@ -57,7 +58,7 @@ pub type PeerSink = Arc<dyn Fn(DeviceInfo, IpAddr) + Send + Sync>;
 
 pub struct ServerState {
     /// This device, as sent in answers.
-    pub info: DeviceInfo,
+    pub info: SharedInfo,
     pub sessions: Arc<SessionManager>,
     pub settings: Arc<Mutex<Settings>>,
     pub download_dir: PathBuf,
@@ -90,7 +91,7 @@ pub fn router(state: Arc<ServerState>) -> Router {
 }
 
 async fn info(State(state): State<Arc<ServerState>>) -> Json<DeviceInfo> {
-    Json(state.info.clone())
+    Json(read_info(&state.info))
 }
 
 async fn register(
@@ -99,7 +100,7 @@ async fn register(
     Json(sender): Json<DeviceInfo>,
 ) -> Json<DeviceInfo> {
     (state.register_peer)(sender, peer.ip());
-    Json(state.info.clone())
+    Json(read_info(&state.info))
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +149,7 @@ async fn prepare_upload(
         Err(_) => return StatusCode::CONFLICT.into_response(),
     };
 
+    let sender_fingerprint = request.info.fingerprint.clone();
     let sender = PeerSender {
         alias: request.info.alias.clone(),
         fingerprint: request.info.fingerprint.clone(),
@@ -188,7 +190,12 @@ async fn prepare_upload(
             state.sessions.clear_pending(&session_id);
             (state.emit)(
                 SESSION_FINISHED_EVENT,
-                json!({ "sessionId": session_id, "status": "declined" }),
+                json!({
+                    "sessionId": session_id,
+                    "status": "declined",
+                    "direction": "receive",
+                    "peer": sender_fingerprint,
+                }),
             );
             return StatusCode::FORBIDDEN.into_response();
         }
@@ -274,12 +281,15 @@ async fn upload(
 
     match receive_file(&state, &session_id, &file, body, &cancelled).await {
         Ok(saved) => {
+            let peer = state.sessions.active_sender(&session_id).map(|s| s.fingerprint);
             if let Some(paths) = state.sessions.complete_file(&session_id, &file.id, saved) {
                 (state.emit)(
                     SESSION_FINISHED_EVENT,
                     json!({
                         "sessionId": session_id,
                         "status": "completed",
+                        "direction": "receive",
+                        "peer": peer,
                         "savedTo": state.download_dir.to_string_lossy(),
                         "files": paths.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
                     }),
@@ -373,6 +383,10 @@ async fn receive_file(
 }
 
 fn emit_progress(state: &Arc<ServerState>, session_id: &str, file: &IncomingFile, received: u64) {
+    let (session_done, session_total) = state
+        .sessions
+        .record_progress(session_id, &file.id, received)
+        .unwrap_or((received, file.size));
     (state.emit)(
         TRANSFER_PROGRESS_EVENT,
         json!({
@@ -381,7 +395,12 @@ fn emit_progress(state: &Arc<ServerState>, session_id: &str, file: &IncomingFile
             "fileName": file.file_name,
             "bytesReceived": received,
             "totalBytes": file.size,
+            // The whole session, which is what the arc on the circle shows.
+            "sessionDone": session_done,
+            "sessionTotal": session_total,
             "direction": "receive",
+            // Which circle on the radar this belongs to.
+            "peer": state.sessions.active_sender(session_id).map(|s| s.fingerprint),
         }),
     );
 }
@@ -438,7 +457,11 @@ async fn cancel(State(state): State<Arc<ServerState>>, Query(query): Query<Cance
         if state.sessions.cancel(&session_id) {
             (state.emit)(
                 SESSION_FINISHED_EVENT,
-                json!({ "sessionId": session_id, "status": "cancelled" }),
+                json!({
+                    "sessionId": session_id,
+                    "status": "cancelled",
+                    "direction": "receive",
+                }),
             );
         }
     }

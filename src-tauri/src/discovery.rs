@@ -14,8 +14,8 @@
 //! our HTTP client always presents ours.
 
 use crate::protocol::{
-    AnnounceMessage, DeviceInfo, DeviceType, ProtocolType, RegisterResponse, DEFAULT_PORT,
-    MULTICAST_GROUP,
+    read_info, AnnounceMessage, DeviceInfo, DeviceType, ProtocolType, RegisterResponse, SharedInfo,
+    DEFAULT_PORT, MULTICAST_GROUP,
 };
 use serde::Serialize;
 use socket2::{Domain, Protocol as SockProtocol, Socket, Type};
@@ -265,7 +265,7 @@ fn build_client(cert_pem: &str, key_pem: &str) -> Result<reqwest::Client, String
 /// The running discovery service.
 pub struct Discovery {
     pub registry: Arc<Registry>,
-    info: DeviceInfo,
+    info: SharedInfo,
     client: reqwest::Client,
     socket: Option<Arc<UdpSocket>>,
     /// Called with the current device list whenever it visibly changes.
@@ -280,12 +280,12 @@ impl Discovery {
     /// Async because binding the socket registers it with the tokio reactor,
     /// which panics outside a runtime context.
     pub async fn new(
-        info: DeviceInfo,
+        info: SharedInfo,
         cert_pem: &str,
         key_pem: &str,
         notify: Arc<dyn Fn(Vec<Device>) + Send + Sync>,
     ) -> Result<Arc<Self>, String> {
-        let registry = Arc::new(Registry::new(info.fingerprint.clone()));
+        let registry = Arc::new(Registry::new(read_info(&info).fingerprint));
         let client = build_client(cert_pem, key_pem)?;
         let socket = match bind_multicast_socket(DEFAULT_PORT) {
             Ok(socket) => Some(Arc::new(socket)),
@@ -370,9 +370,14 @@ impl Discovery {
         (self.notify)(devices);
     }
 
+    /// This device's fingerprint, which never changes.
+    fn fingerprint(&self) -> String {
+        read_info(&self.info).fingerprint
+    }
+
     fn announce_payload(&self, announce: bool) -> Vec<u8> {
         serde_json::to_vec(&AnnounceMessage {
-            device: self.info.clone(),
+            device: read_info(&self.info),
             announce,
         })
         .unwrap_or_default()
@@ -386,7 +391,8 @@ impl Discovery {
         }
     }
 
-    async fn announce_burst(&self) {
+    /// Sends an announce burst now, e.g. after the alias changed.
+    pub async fn announce_burst(&self) {
         for delay in ANNOUNCE_BURST_DELAYS {
             tokio::time::sleep(delay).await;
             self.announce_once().await;
@@ -417,7 +423,7 @@ impl Discovery {
         let Ok(message) = serde_json::from_slice::<AnnounceMessage>(bytes) else {
             return;
         };
-        if message.device.fingerprint == self.info.fingerprint {
+        if message.device.fingerprint == self.fingerprint() {
             return; // our own announce, looped back
         }
 
@@ -464,12 +470,18 @@ impl Discovery {
             port,
             REGISTER_PATH
         );
-        let response = self.client.post(&url).json(&self.info).send().await.ok()?;
+        let response = self
+            .client
+            .post(&url)
+            .json(&read_info(&self.info))
+            .send()
+            .await
+            .ok()?;
         if !response.status().is_success() {
             return None;
         }
         let body = response.json::<RegisterResponse>().await.ok()?;
-        if body.fingerprint == self.info.fingerprint {
+        if body.fingerprint == self.fingerprint() {
             return None;
         }
         let device = Device::from_register_response(body, ip, port, protocol, now_ms());
