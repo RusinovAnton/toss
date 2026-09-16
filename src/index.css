@@ -58,8 +58,10 @@ input {
   -webkit-user-select: text;
 }
 
-/* Three rings leaving the centre circle and fading out at the window edge. */
-@keyframes pulse {
+/* Three rings leaving the centre circle and fading out at the window edge.
+   The names are prefixed because Tailwind ships its own `pulse`, `spin` and
+   friends, and a same-named @keyframes silently replaces ours. */
+@keyframes toss-wave {
   from {
     transform: scale(1);
     opacity: 0.6;
@@ -77,7 +79,10 @@ input {
   vector-effect: non-scaling-stroke;
   transform-box: view-box;
   transform-origin: center;
-  animation: pulse 2.4s linear infinite;
+  /* `backwards` keeps a ring at its starting opacity during its delay,
+     instead of the full-strength base style, which read as a hard ring
+     sitting on the circle for the first cycle. */
+  animation: toss-wave 2.4s linear infinite backwards;
 }
 
 /* Cheap when the window is in the background, and less distracting. */
@@ -85,7 +90,7 @@ body.unfocused .pulse {
   animation-play-state: paused;
 }
 
-@keyframes appear {
+@keyframes toss-appear {
   from {
     opacity: 0;
     transform: translate(-50%, -50%) scale(0.6);
@@ -97,10 +102,10 @@ body.unfocused .pulse {
 }
 
 .device-appear {
-  animation: appear 200ms ease-out both;
+  animation: toss-appear 200ms ease-out both;
 }
 
-@keyframes shake {
+@keyframes toss-shake {
   0%,
   100% {
     transform: translate(-50%, -50%);
@@ -120,10 +125,10 @@ body.unfocused .pulse {
 }
 
 .shake {
-  animation: shake 400ms ease-in-out;
+  animation: toss-shake 400ms ease-in-out;
 }
 
-@keyframes flash-ok {
+@keyframes toss-flash-ok {
   0%,
   100% {
     stroke: var(--ring);
@@ -134,7 +139,7 @@ body.unfocused .pulse {
   }
 }
 
-@keyframes flash-bad {
+@keyframes toss-flash-bad {
   0%,
   100% {
     stroke: var(--ring);
@@ -146,14 +151,14 @@ body.unfocused .pulse {
 }
 
 .flash-ok {
-  animation: flash-ok 900ms ease-in-out;
+  animation: toss-flash-ok 900ms ease-in-out;
 }
 
 .flash-bad {
-  animation: flash-bad 900ms ease-in-out;
+  animation: toss-flash-bad 900ms ease-in-out;
 }
 
-@keyframes card-up {
+@keyframes toss-card-up {
   from {
     opacity: 0;
     transform: translateY(120%);
@@ -165,5 +170,5 @@ body.unfocused .pulse {
 }
 
 .card-up {
-  animation: card-up 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: toss-card-up 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
