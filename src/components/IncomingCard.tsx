@@ -8,10 +8,15 @@ import type { IncomingRequest } from "../lib/tauri";
  */
 export function IncomingCard({
   request,
+  trust,
+  onTrustChange,
   onAccept,
   onDeny,
 }: {
   request: IncomingRequest;
+  /** Accept, and stop asking about this device. */
+  trust: boolean;
+  onTrustChange: (trust: boolean) => void;
   onAccept: () => void;
   onDeny: () => void;
 }) {
@@ -37,6 +42,19 @@ export function IncomingCard({
           </p>
         </div>
       </div>
+      {request.sender.verifiedFingerprint && (
+        <label className="mt-2 flex items-center gap-2 text-[11px]">
+          <input
+            type="checkbox"
+            checked={trust}
+            onChange={(event) => onTrustChange(event.target.checked)}
+          />
+          <span style={{ color: "var(--muted)" }}>
+            Trust this device, and stop asking
+          </span>
+        </label>
+      )}
+
       <div className="mt-3 flex gap-2">
         <button
           type="button"

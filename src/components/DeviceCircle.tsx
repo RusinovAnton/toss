@@ -23,6 +23,7 @@ export function DeviceCircle({
   placement,
   transfer,
   hovered,
+  trusted,
   paired,
   onClick,
   onMenu,
@@ -32,6 +33,8 @@ export function DeviceCircle({
   transfer: Transfer;
   /** Files are being dragged over this circle. */
   hovered: boolean;
+  /** Its transfers are accepted without asking. */
+  trusted: boolean;
   /** Paired: accepted without asking, and the clipboard flows both ways. */
   paired: boolean;
   onClick: () => void;
@@ -78,7 +81,7 @@ export function DeviceCircle({
             cy={ARC_BOX / 2}
             r={ARC_RADIUS}
             fill="none"
-            strokeWidth={hovered || paired ? 2 : 1}
+            strokeWidth={hovered || paired ? 2 : trusted ? 1.5 : 1}
             className={
               transfer.phase === "done"
                 ? "flash-ok"
@@ -89,8 +92,11 @@ export function DeviceCircle({
             style={{
               // A paired device wears a solid ring, so pairing is visible
               // without opening anything.
-              stroke: hovered || paired ? "var(--accent)" : "var(--ring)",
-              opacity: paired && !hovered ? 0.7 : 1,
+              // A trusted device wears a faint accent ring, a paired one a
+              // solid one, so the two levels are visible at a glance.
+              stroke:
+                hovered || paired || trusted ? "var(--accent)" : "var(--ring)",
+              opacity: !hovered && trusted && !paired ? 0.45 : paired && !hovered ? 0.8 : 1,
               transition: "stroke 150ms ease",
             }}
           />

@@ -268,11 +268,12 @@ async fn pairing_someone_else_does_not_let_this_device_in() {
 #[tokio::test]
 async fn clipboard_text_arrives_as_text_and_never_as_a_file() {
     let fixture = fixture().await;
-    fixture
-        .receiver_trust
-        .lock()
-        .unwrap()
-        .trust(&fixture.sender_identity.fingerprint, "Sender");
+    // Paired, not merely trusted: the clipboard is what pairing is for.
+    fixture.receiver_trust.lock().unwrap().set_paired(
+        &fixture.sender_identity.fingerprint,
+        "Sender",
+        true,
+    );
 
     let summary = fixture
         .sender
@@ -299,7 +300,35 @@ async fn clipboard_text_arrives_as_text_and_never_as_a_file() {
 }
 
 #[tokio::test]
-async fn a_message_from_an_unpaired_device_is_offered_with_its_text() {
+async fn text_from_a_device_that_is_only_trusted_is_saved_as_a_file() {
+    let fixture = fixture().await;
+    // Trusted, so it needs no answer, but not paired, so it has no claim on
+    // the clipboard.
+    fixture
+        .receiver_trust
+        .lock()
+        .unwrap()
+        .trust(&fixture.sender_identity.fingerprint, "Sender");
+
+    fixture
+        .sender
+        .send_text(fixture.target(), "not for your clipboard", None)
+        .await
+        .unwrap();
+
+    assert!(
+        fixture.events("text-received").is_empty(),
+        "an unpaired device must not reach the clipboard"
+    );
+    assert_eq!(fixture.saved_files(), vec!["message.txt"]);
+    assert_eq!(
+        std::fs::read_to_string(fixture.download_dir.join("message.txt")).unwrap(),
+        "not for your clipboard"
+    );
+}
+
+#[tokio::test]
+async fn a_message_from_an_unknown_device_is_still_asked_about() {
     let fixture = fixture().await;
     fixture.auto_respond(false);
 
@@ -309,10 +338,34 @@ async fn a_message_from_an_unpaired_device_is_offered_with_its_text() {
         .await
         .unwrap_err();
     assert_eq!(error.code(), "declined");
+    assert_eq!(fixture.events("incoming-request").len(), 1);
+}
 
-    let request = &fixture.events("incoming-request")[0];
-    // The card can show the text, so nobody accepts blind.
-    assert_eq!(request["text"], "peek at this");
+#[tokio::test]
+async fn trusting_a_device_does_not_pair_it() {
+    let fixture = fixture().await;
+    fixture
+        .receiver_trust
+        .lock()
+        .unwrap()
+        .trust(&fixture.sender_identity.fingerprint, "Sender");
+    let path = fixture.write("one.txt", b"first");
+
+    // Files go through without a card...
+    fixture
+        .sender
+        .send(fixture.target(), &[path], None)
+        .await
+        .unwrap();
+    assert!(fixture.events("incoming-request").is_empty());
+
+    // ...but the clipboard does not.
+    fixture
+        .sender
+        .send_text(fixture.target(), "hello", None)
+        .await
+        .unwrap();
+    assert!(fixture.events("text-received").is_empty());
 }
 
 #[tokio::test]

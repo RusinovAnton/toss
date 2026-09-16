@@ -53,6 +53,49 @@ impl Pair {
         path
     }
 
+    /// Keeps answering, for tests that send more than once.
+    fn auto_respond_all(&self, accept: bool) {
+        let state = Arc::clone(&self.receiver_state);
+        let events = Arc::clone(&self.receiver_events);
+        tokio::spawn(async move {
+            let mut answered: Vec<String> = Vec::new();
+            for _ in 0..4000 {
+                let pending = events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(event, _)| event == "incoming-request")
+                    .map(|(_, payload)| payload.clone())
+                    .find(|payload| {
+                        let id = payload["sessionId"].as_str().unwrap_or_default();
+                        !answered.iter().any(|seen| seen == id)
+                    });
+                if let Some(payload) = pending {
+                    let session = payload["sessionId"].as_str().unwrap().to_string();
+                    answered.push(session.clone());
+                    let ids: Vec<String> = if accept {
+                        payload["files"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|f| f["id"].as_str().unwrap().to_string())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let decision = if ids.is_empty() {
+                        Decision::Decline
+                    } else {
+                        Decision::Accept(ids)
+                    };
+                    let _ = state.sessions.respond(&session, decision);
+                    continue;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+    }
+
     /// Answers the receiver's next incoming request.
     fn auto_respond(&self, accept: bool) {
         let state = Arc::clone(&self.receiver_state);
@@ -100,7 +143,12 @@ fn collect(base: &PathBuf, dir: &PathBuf, out: &mut Vec<String>) {
         if path.is_dir() {
             collect(base, &path, out);
         } else {
-            out.push(path.strip_prefix(base).unwrap().to_string_lossy().to_string());
+            out.push(
+                path.strip_prefix(base)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
         }
     }
 }
@@ -177,16 +225,17 @@ async fn pair(settings: Settings) -> Pair {
     }
 }
 
-fn quick_save() -> Settings {
-    Settings {
-        quick_save: true,
-        ..Settings::default()
-    }
+/// The receiver answers every request; `Pair::auto_respond` supplies the
+/// answer. Nothing is accepted silently any more unless a device has been
+/// trusted, which needs TLS.
+fn asked() -> Settings {
+    Settings::default()
 }
 
 #[tokio::test]
 async fn files_arrive_at_the_other_side() {
-    let pair = pair(quick_save()).await;
+    let pair = pair(asked()).await;
+    pair.auto_respond(true);
     let one = pair.write("one.txt", b"first");
     let two = pair.write("two.txt", b"second");
 
@@ -207,7 +256,8 @@ async fn files_arrive_at_the_other_side() {
 
 #[tokio::test]
 async fn a_nested_folder_keeps_its_structure() {
-    let pair = pair(quick_save()).await;
+    let pair = pair(asked()).await;
+    pair.auto_respond(true);
     pair.write("holiday/readme.txt", b"hi");
     pair.write("holiday/2024/one.txt", b"one");
     pair.write("holiday/2024/june/two.txt", b"two");
@@ -234,7 +284,8 @@ async fn a_nested_folder_keeps_its_structure() {
 
 #[tokio::test]
 async fn a_large_file_survives_the_round_trip() {
-    let pair = pair(quick_save()).await;
+    let pair = pair(asked()).await;
+    pair.auto_respond(true);
     let payload: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
     let path = pair.write("big.bin", &payload);
 
@@ -316,7 +367,20 @@ async fn a_busy_receiver_is_reported_as_busy() {
     let path = pair.write("one.txt", b"first");
 
     // Hold the receiver's only session slot with an unanswered request.
-    let held = pair.receiver_state.sessions.begin("held").unwrap();
+    let held = pair
+        .receiver_state
+        .sessions
+        .begin(
+            "held",
+            toss_lib::session::Sender {
+                alias: "Someone else".into(),
+                fingerprint: "OTHER".into(),
+                verified_fingerprint: None,
+                device_model: None,
+                ip: "127.0.0.1".parse().unwrap(),
+            },
+        )
+        .unwrap();
 
     let error = pair
         .sender
@@ -331,10 +395,11 @@ async fn a_busy_receiver_is_reported_as_busy() {
 async fn a_pin_is_asked_for_and_then_accepted() {
     let pair = pair(Settings {
         pin: Some("123456".into()),
-        quick_save: true,
         ..Settings::default()
     })
     .await;
+    // Three attempts here, so the answers have to keep coming.
+    pair.auto_respond_all(true);
     let path = pair.write("one.txt", b"first");
 
     let error = pair
@@ -361,7 +426,8 @@ async fn a_pin_is_asked_for_and_then_accepted() {
 
 #[tokio::test]
 async fn sending_nothing_is_refused_before_any_request() {
-    let pair = pair(quick_save()).await;
+    let pair = pair(asked()).await;
+    pair.auto_respond(true);
     let empty = pair.work_dir.join("empty");
     std::fs::create_dir_all(&empty).unwrap();
 
@@ -376,7 +442,8 @@ async fn sending_nothing_is_refused_before_any_request() {
 
 #[tokio::test]
 async fn an_unreachable_peer_is_reported_as_a_lost_connection() {
-    let pair = pair(quick_save()).await;
+    let pair = pair(asked()).await;
+    pair.auto_respond(true);
     let path = pair.write("one.txt", b"first");
     let nowhere = Target {
         fingerprint: "NOBODY".into(),
@@ -411,13 +478,12 @@ async fn cancelling_stops_the_transfer_and_frees_the_receiver() {
             download: false,
         })),
         sessions: Arc::new(SessionManager::new()),
-        settings: Arc::new(Mutex::new(quick_save())),
+        settings: Arc::new(Mutex::new(asked())),
         trusted: Arc::new(Mutex::new(TrustStore::default())),
         download_dir: download_dir.clone(),
         emit: receiver_emit,
         register_peer: Arc::new(|_, _| {}),
     });
-    let _ = &receiver_events;
 
     let listener = PlainListener::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -425,6 +491,34 @@ async fn cancelling_stops_the_transfer_and_frees_the_receiver() {
     tokio::spawn(async move {
         serve(listener, app).await.unwrap();
     });
+
+    // Nothing is accepted silently any more, so this receiver needs an answer.
+    {
+        let state = Arc::clone(&receiver_state);
+        let events = Arc::clone(&receiver_events);
+        tokio::spawn(async move {
+            for _ in 0..2000 {
+                let pending = events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|(event, _)| event == "incoming-request")
+                    .map(|(_, payload)| payload.clone());
+                if let Some(payload) = pending {
+                    let session = payload["sessionId"].as_str().unwrap().to_string();
+                    let ids: Vec<String> = payload["files"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|f| f["id"].as_str().unwrap().to_string())
+                        .collect();
+                    let _ = state.sessions.respond(&session, Decision::Accept(ids));
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+    }
 
     // Cancelling from inside the progress callback removes the race: the flag
     // is set before the upload stream reads its next chunk.
@@ -485,7 +579,8 @@ async fn cancelling_stops_the_transfer_and_frees_the_receiver() {
 
 #[tokio::test]
 async fn a_completed_send_reports_it_finished() {
-    let pair = pair(quick_save()).await;
+    let pair = pair(asked()).await;
+    pair.auto_respond(true);
     let path = pair.write("one.txt", b"first");
 
     pair.sender

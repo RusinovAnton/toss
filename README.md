@@ -33,15 +33,16 @@ see orbits around it.
   menu bar rather than on screen.
 - **Watch** the ring around a circle fill as the transfer runs. Green when it
   lands, red with a reason when it does not.
-- **Pair** a device you use often by right-clicking its circle. Paired devices
-  skip the accept step, wear a solid ring, and can pass clipboard text both
-  ways. Copy on one machine, right-click the other's circle, send clipboard,
-  and it is ready to paste. With a single paired device, Cmd/Ctrl+Shift+V does
-  it without the menu.
+- **Trust** a device the first time it sends you something, with the tick on
+  the card. It stops asking from then on. Nothing else on the network gets that
+  treatment; there is no accept-from-anyone switch.
+- **Pair** a device to share clipboards as well. Copy on one machine, paste on
+  the other, once the shared clipboard is on in settings. Pairing is the
+  stronger step, so trusting a device does not hand over your clipboard.
 
-Pairing pins that device's TLS certificate. Something else answering at the
-same address is refused rather than trusted, so a paired device really is the
-one you paired with.
+Both pin that device's TLS certificate. Something else answering at the same
+address is refused rather than trusted, so a device you know really is the one
+you met.
 
 ## Install
 

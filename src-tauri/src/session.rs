@@ -56,10 +56,14 @@ impl IncomingFile {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sender {
     pub alias: String,
+    /// What the sender claimed in the request body.
     pub fingerprint: String,
+    /// What its certificate proved, when there was one. Trust is granted
+    /// against this, never against the claim.
+    pub verified_fingerprint: Option<String>,
     pub device_model: Option<String>,
     pub ip: IpAddr,
 }
@@ -95,6 +99,9 @@ impl ActiveSession {
 
 struct Pending {
     id: String,
+    /// Kept so answering can also grant trust, which needs the fingerprint
+    /// the handshake proved.
+    sender: Sender,
     responder: oneshot::Sender<Decision>,
 }
 
@@ -149,14 +156,19 @@ impl SessionManager {
 
     /// Claims the single session slot and registers the channel the user's
     /// decision arrives on. `Err(Busy)` when someone else already holds it.
-    pub fn begin(&self, id: &str) -> Result<oneshot::Receiver<Decision>, SessionError> {
-        self.begin_with_timeout(id, IDLE_TIMEOUT)
+    pub fn begin(
+        &self,
+        id: &str,
+        sender: Sender,
+    ) -> Result<oneshot::Receiver<Decision>, SessionError> {
+        self.begin_with_timeout(id, sender, IDLE_TIMEOUT)
     }
 
     /// [`SessionManager::begin`] with an explicit idle timeout, for tests.
     pub fn begin_with_timeout(
         &self,
         id: &str,
+        sender: Sender,
         timeout: Duration,
     ) -> Result<oneshot::Receiver<Decision>, SessionError> {
         let mut inner = self.lock();
@@ -167,6 +179,7 @@ impl SessionManager {
         let (tx, rx) = oneshot::channel();
         inner.pending = Some(Pending {
             id: id.to_string(),
+            sender,
             responder: tx,
         });
         Ok(rx)
@@ -296,6 +309,16 @@ impl SessionManager {
         cancelled
     }
 
+    /// The device behind a request that is still waiting for an answer.
+    pub fn pending_sender(&self, session_id: &str) -> Option<Sender> {
+        let inner = self.lock();
+        inner
+            .pending
+            .as_ref()
+            .filter(|pending| pending.id == session_id)
+            .map(|pending| pending.sender.clone())
+    }
+
     /// The text of the active session, when it is a clipboard message.
     pub fn active_message(&self, session_id: &str) -> Option<String> {
         let inner = self.lock();
@@ -357,6 +380,7 @@ mod tests {
         Sender {
             alias: "Secret Banana".into(),
             fingerprint: "F".into(),
+            verified_fingerprint: Some("VERIFIED".into()),
             device_model: Some("Windows".into()),
             ip: peer(),
         }
@@ -389,21 +413,21 @@ mod tests {
     #[test]
     fn a_second_request_is_refused_while_one_is_pending() {
         let manager = SessionManager::new();
-        let _rx = manager.begin("s1").unwrap();
-        assert_eq!(manager.begin("s2").unwrap_err(), SessionError::Busy);
+        let _rx = manager.begin("s1", sender()).unwrap();
+        assert_eq!(manager.begin("s2", sender()).unwrap_err(), SessionError::Busy);
     }
 
     #[test]
     fn a_second_request_is_refused_while_one_is_active() {
         let manager = SessionManager::new();
         activate_with(&manager, &["a"]);
-        assert_eq!(manager.begin("s2").unwrap_err(), SessionError::Busy);
+        assert_eq!(manager.begin("s2", sender()).unwrap_err(), SessionError::Busy);
     }
 
     #[tokio::test]
     async fn the_decision_reaches_the_waiting_request() {
         let manager = SessionManager::new();
-        let rx = manager.begin("s1").unwrap();
+        let rx = manager.begin("s1", sender()).unwrap();
         manager
             .respond("s1", Decision::Accept(vec!["a".into()]))
             .unwrap();
@@ -413,14 +437,14 @@ mod tests {
     #[test]
     fn answering_an_unknown_session_fails() {
         let manager = SessionManager::new();
-        let _rx = manager.begin("s1").unwrap();
+        let _rx = manager.begin("s1", sender()).unwrap();
         assert!(manager.respond("other", Decision::Decline).is_err());
     }
 
     #[test]
     fn clearing_a_pending_request_frees_the_slot() {
         let manager = SessionManager::new();
-        let _rx = manager.begin("s1").unwrap();
+        let _rx = manager.begin("s1", sender()).unwrap();
         manager.clear_pending("s1");
         assert!(!manager.is_busy());
     }
@@ -497,6 +521,15 @@ mod tests {
     }
 
     #[test]
+    fn a_waiting_request_remembers_who_sent_it() {
+        let manager = SessionManager::new();
+        let _rx = manager.begin("s1", sender()).unwrap();
+        let waiting = manager.pending_sender("s1").unwrap();
+        assert_eq!(waiting.verified_fingerprint.as_deref(), Some("VERIFIED"));
+        assert_eq!(manager.pending_sender("other"), None);
+    }
+
+    #[test]
     fn a_message_session_remembers_its_text() {
         let manager = SessionManager::new();
         let offered = vec![file("a", "tok")];
@@ -531,13 +564,15 @@ mod tests {
         activate_with(&manager, &["a"]);
         // Still fresh: a new sender has to wait.
         assert_eq!(
-            manager.begin_with_timeout("s2", Duration::from_secs(60)).unwrap_err(),
+            manager
+                .begin_with_timeout("s2", sender(), Duration::from_secs(60))
+                .unwrap_err(),
             SessionError::Busy
         );
         // Once it has gone quiet, the slot is taken over.
         let (_, cancelled) = manager.authorize_upload("s1", "a", "tok", peer()).unwrap();
         assert!(manager
-            .begin_with_timeout("s2", Duration::from_millis(0))
+            .begin_with_timeout("s2", sender(), Duration::from_millis(0))
             .is_ok());
         assert!(cancelled.load(Ordering::SeqCst));
     }
@@ -545,7 +580,7 @@ mod tests {
     #[tokio::test]
     async fn cancelling_a_pending_request_declines_it() {
         let manager = SessionManager::new();
-        let rx = manager.begin("s1").unwrap();
+        let rx = manager.begin("s1", sender()).unwrap();
         assert!(manager.cancel("s1"));
         assert_eq!(rx.await.unwrap(), Decision::Decline);
         assert!(!manager.is_busy());

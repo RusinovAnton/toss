@@ -80,17 +80,6 @@ export function SettingsPanel({
             />
           </label>
 
-          <label className="mt-3 flex items-center justify-between">
-            <span style={{ color: "var(--muted)" }}>Quick Save</span>
-            <input
-              type="checkbox"
-              checked={settings.quickSave}
-              onChange={(event) =>
-                onSettings({ ...settings, quickSave: event.target.checked })
-              }
-            />
-          </label>
-
           <label className="mt-2 flex items-center justify-between">
             <span style={{ color: "var(--muted)" }}>Shared clipboard</span>
             <input

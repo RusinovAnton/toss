@@ -50,6 +50,49 @@ impl Harness {
         std::fs::read_to_string(self.download_dir.join(relative)).unwrap()
     }
 
+    /// Keeps answering, for tests that make several requests in a row.
+    fn auto_respond_all(&self, accept: bool) {
+        let state = Arc::clone(&self.state);
+        let events = Arc::clone(&self.events);
+        tokio::spawn(async move {
+            let mut answered: Vec<String> = Vec::new();
+            for _ in 0..4000 {
+                let pending = events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(event, _)| event == "incoming-request")
+                    .map(|(_, payload)| payload.clone())
+                    .find(|payload| {
+                        let id = payload["sessionId"].as_str().unwrap_or_default();
+                        !answered.iter().any(|seen| seen == id)
+                    });
+                if let Some(payload) = pending {
+                    let session = payload["sessionId"].as_str().unwrap().to_string();
+                    answered.push(session.clone());
+                    let ids: Vec<String> = if accept {
+                        payload["files"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|f| f["id"].as_str().unwrap().to_string())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let decision = if ids.is_empty() {
+                        toss_lib::session::Decision::Decline
+                    } else {
+                        toss_lib::session::Decision::Accept(ids)
+                    };
+                    let _ = state.sessions.respond(&session, decision);
+                    continue;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+    }
+
     /// Answers the next incoming request. `accept` picks every offered file.
     fn auto_respond(&self, accept: bool) {
         let state = Arc::clone(&self.state);
@@ -97,11 +140,13 @@ fn collect(base: &PathBuf, dir: &PathBuf, out: &mut Vec<String>) {
         if path.is_dir() {
             collect(base, &path, out);
         } else {
+            // Windows writes `photos\2024\three.txt`; comparing against a
+            // fixed list means normalising the separator here.
             out.push(
                 path.strip_prefix(base)
                     .unwrap()
                     .to_string_lossy()
-                    .to_string(),
+                    .replace('\\', "/"),
             );
         }
     }
@@ -276,12 +321,9 @@ async fn missing_upload_parameters_are_a_bad_request() {
 
 #[tokio::test]
 async fn a_colliding_name_gets_a_numbered_suffix() {
-    let harness = harness(Settings {
-        quick_save: true,
-        ..Settings::default()
-    })
-    .await;
+    let harness = harness(Settings::default()).await;
 
+    harness.auto_respond_all(true);
     for expected in ["cat.png", "cat (1).png", "cat (2).png"] {
         let prepared: Value = harness
             .client
@@ -315,11 +357,7 @@ async fn a_colliding_name_gets_a_numbered_suffix() {
 
 #[tokio::test]
 async fn path_traversal_is_rejected_before_anything_is_created() {
-    let harness = harness(Settings {
-        quick_save: true,
-        ..Settings::default()
-    })
-    .await;
+    let harness = harness(Settings::default()).await;
 
     for name in ["../escape.txt", "a/../../escape.txt", "/etc/passwd", "..\\escape.txt"] {
         let response = harness
@@ -342,7 +380,6 @@ async fn path_traversal_is_rejected_before_anything_is_created() {
 async fn a_pin_is_required_when_one_is_set() {
     let harness = harness(Settings {
         pin: Some("123456".into()),
-        quick_save: true,
         ..Settings::default()
     })
     .await;
@@ -367,6 +404,7 @@ async fn a_pin_is_required_when_one_is_set() {
         .unwrap();
     assert_eq!(wrong.status(), 401);
 
+    harness.auto_respond(true);
     let right = harness
         .client
         .post(harness.url("/api/localsend/v2/prepare-upload?pin=123456"))
@@ -406,11 +444,8 @@ async fn a_second_sender_is_told_the_receiver_is_busy() {
 
 #[tokio::test]
 async fn a_checksum_mismatch_is_reported_and_the_partial_file_removed() {
-    let harness = harness(Settings {
-        quick_save: true,
-        ..Settings::default()
-    })
-    .await;
+    let harness = harness(Settings::default()).await;
+    harness.auto_respond(true);
 
     let prepared: Value = harness
         .client
@@ -446,11 +481,8 @@ async fn a_checksum_mismatch_is_reported_and_the_partial_file_removed() {
 
 #[tokio::test]
 async fn a_matching_checksum_is_accepted() {
-    let harness = harness(Settings {
-        quick_save: true,
-        ..Settings::default()
-    })
-    .await;
+    let harness = harness(Settings::default()).await;
+    harness.auto_respond(true);
     // sha256("hello")
     let digest = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 
@@ -487,12 +519,11 @@ async fn a_matching_checksum_is_accepted() {
 }
 
 #[tokio::test]
-async fn quick_save_accepts_without_asking_the_user() {
-    let harness = harness(Settings {
-        quick_save: true,
-        ..Settings::default()
-    })
-    .await;
+async fn an_unknown_device_is_always_asked_about() {
+    // Nothing is accepted without either an answer or the sender having been
+    // trusted, and trust needs a certificate, which plain HTTP cannot have.
+    let harness = harness(Settings::default()).await;
+    harness.auto_respond(true);
 
     let response = harness
         .client
@@ -502,7 +533,7 @@ async fn quick_save_accepts_without_asking_the_user() {
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
-    assert!(harness.events_named("incoming-request").is_empty());
+    assert_eq!(harness.events_named("incoming-request").len(), 1);
 }
 
 #[tokio::test]
@@ -521,11 +552,8 @@ async fn an_empty_file_list_needs_no_transfer() {
 
 #[tokio::test]
 async fn cancelling_frees_the_receiver_for_the_next_sender() {
-    let harness = harness(Settings {
-        quick_save: true,
-        ..Settings::default()
-    })
-    .await;
+    let harness = harness(Settings::default()).await;
+    harness.auto_respond(true);
 
     let prepared: Value = harness
         .client

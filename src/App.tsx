@@ -22,11 +22,13 @@ import {
   getIdentity,
   getSettings,
   listDevices,
+  forgetDevice,
   listTrusted,
   onTextReceived,
+  pairDevice,
   sendClipboard,
   trustDevice,
-  untrustDevice,
+
   onDevicesChanged,
   onIncomingRequest,
   onSessionFinished,
@@ -67,7 +69,6 @@ export default function App() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [settings, setSettings] = useState<Settings>({
     pin: null,
-    quickSave: false,
     clipboardSync: false,
     startAtLogin: false,
   });
@@ -86,6 +87,8 @@ export default function App() {
   const [trusted, setTrusted] = useState<TrustedDevice[]>([]);
   const [menu, setMenu] = useState<{ device: Device; x: number; y: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /// Ticked on the card: accept, and stop asking about this device.
+  const [trustSender, setTrustSender] = useState(false);
 
   const placements = useMemo(() => placeDevices(devices.length, size), [devices.length, size]);
   // Drag events arrive outside React, so the hit test reads the latest
@@ -97,8 +100,10 @@ export default function App() {
   const trustedRef = useRef(trusted);
   trustedRef.current = trusted;
 
-  const isPaired = (device: Device) =>
+  const isTrusted = (device: Device) =>
     trusted.some((entry) => entry.fingerprint === device.fingerprint);
+  const isPaired = (device: Device) =>
+    trusted.some((entry) => entry.fingerprint === device.fingerprint && entry.paired);
 
   const setTransfer = useCallback((peer: string, transfer: Transfer) => {
     setTransfers((current) => ({ ...current, [peer]: transfer }));
@@ -146,7 +151,18 @@ export default function App() {
       setIdentity(PREVIEW_IDENTITY);
       setDevices(PREVIEW_DEVICES);
       setTrusted([
-        { fingerprint: PREVIEW_DEVICES[0].fingerprint, alias: "Great Strawberry", trustedAt: 0 },
+        {
+          fingerprint: PREVIEW_DEVICES[0].fingerprint,
+          alias: "Great Strawberry",
+          trustedAt: 0,
+          paired: true,
+        },
+        {
+          fingerprint: PREVIEW_DEVICES[2].fingerprint,
+          alias: "Quiet Pineapple",
+          trustedAt: 0,
+          paired: false,
+        },
       ]);
       setTransfer(PREVIEW_DEVICES[1].fingerprint, { phase: "active", progress: 0.42 });
       return;
@@ -158,7 +174,10 @@ export default function App() {
 
     const unlisteners = [
       onDevicesChanged(setDevices),
-      onIncomingRequest(setIncoming),
+      onIncomingRequest((request) => {
+        setIncoming(request);
+        setTrustSender(false);
+      }),
       onTextReceived((received) => {
         // The clipboard itself is written in Rust, so the sync loop knows the
         // text came from elsewhere and does not send it straight back.
@@ -305,22 +324,35 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [saved]);
 
-  async function pair(device: Device) {
+  async function trust(device: Device) {
     setMenu(null);
     try {
       await trustDevice(device.fingerprint);
       setTrusted(await listTrusted());
-      setNotice(`Paired with ${device.alias}`);
+      setNotice(`${device.alias} no longer asks`);
     } catch (error) {
       setNotice(String(error));
     }
   }
 
-  async function unpair(device: Device) {
+  async function setPaired(device: Device, paired: boolean) {
     setMenu(null);
-    await untrustDevice(device.fingerprint).catch(console.error);
+    try {
+      await pairDevice(device.fingerprint, paired);
+      setTrusted(await listTrusted());
+      setNotice(
+        paired ? `Sharing the clipboard with ${device.alias}` : `Clipboard off for ${device.alias}`,
+      );
+    } catch (error) {
+      setNotice(String(error));
+    }
+  }
+
+  async function forget(device: Device) {
+    setMenu(null);
+    await forgetDevice(device.fingerprint).catch(console.error);
     setTrusted(await listTrusted().catch(() => []));
-    setNotice(`Unpaired ${device.alias}`);
+    setNotice(`Forgot ${device.alias}`);
   }
 
   async function pushClipboard(device: Device) {
@@ -346,8 +378,11 @@ export default function App() {
   function answer(accept: boolean) {
     if (!incoming) return;
     const ids = accept ? incoming.files.map((file) => file.id) : [];
-    respondToRequest(incoming.sessionId, ids).catch(console.error);
+    respondToRequest(incoming.sessionId, ids, accept && trustSender)
+      .then(() => (accept && trustSender ? listTrusted().then(setTrusted) : undefined))
+      .catch(console.error);
     setIncoming(null);
+    setTrustSender(false);
   }
 
   /// Clicking a circle asks what to send it. Dragging onto it does the same
@@ -377,6 +412,7 @@ export default function App() {
           placement={placements[index]}
           transfer={transfers[device.fingerprint] ?? IDLE}
           hovered={hovered === index}
+          trusted={isTrusted(device)}
           paired={isPaired(device)}
           onClick={() => void pickFor(device)}
           onMenu={(x, y) => setMenu({ device, x, y })}
@@ -386,13 +422,16 @@ export default function App() {
       {menu && (
         <DeviceMenu
           device={menu.device}
+          trusted={isTrusted(menu.device)}
           paired={isPaired(menu.device)}
           x={menu.x}
           y={menu.y}
           onSendFiles={() => void pickFor(menu.device)}
           onSendFolder={() => void pickFor(menu.device, true)}
-          onPair={() => void pair(menu.device)}
-          onUnpair={() => void unpair(menu.device)}
+          onTrust={() => void trust(menu.device)}
+          onPair={() => void setPaired(menu.device, true)}
+          onUnpair={() => void setPaired(menu.device, false)}
+          onForget={() => void forget(menu.device)}
           onSendClipboard={() => void pushClipboard(menu.device)}
           onClose={() => setMenu(null)}
         />
@@ -410,6 +449,8 @@ export default function App() {
       {incoming ? (
         <IncomingCard
           request={incoming}
+          trust={trustSender}
+          onTrustChange={setTrustSender}
           onAccept={() => answer(true)}
           onDeny={() => answer(false)}
         />

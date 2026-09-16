@@ -187,14 +187,31 @@ To try a real send by hand:
 TOSS_TARGET=192.168.1.5:53317 TOSS_SEND=/path/to/folder cargo test --test live_send -- --ignored --nocapture
 ```
 
-## Pairing and the clipboard
+## Trusted and paired
 
-Pairing a device does two things: its requests are accepted without asking, and
-text can be passed between the two clipboards.
+Two levels, and the difference matters:
 
-**What makes it safe.** A device is identified by the SHA-256 fingerprint of
+- **Trusted**: transfers from it are accepted without asking. Granted from the
+  card the first time a device sends something, or from its menu.
+- **Paired**: trusted, and clipboard text flows when the shared clipboard is on.
+  Pairing is the stronger step, because a clipboard is a far more sensitive
+  thing to hand over than a folder of files.
+
+Text from a device that is only trusted is saved as an ordinary file rather
+than touching the clipboard. Text from an unknown device raises the card like
+anything else.
+
+There is no longer a blanket "accept from anyone" setting. It used to exist as
+Quick Save, copied from LocalSend, and it meant that on café wifi anyone could
+drop files into Downloads. Trusting one device from the card covers the same
+convenience without the hole. Old settings files carrying `quickSave` still
+load; the key is ignored.
+
+**What makes both safe.** A device is identified by the SHA-256 fingerprint of
 its TLS certificate, taken from the handshake, never from the `fingerprint`
-field in a request body. That field is trivially forged, which is why the
+field in a request body. Ticking trust on the card grants it against that
+verified fingerprint; a sender that presented no certificate is quietly not
+trusted, because there would be nothing to remember but a claim. That field is trivially forged, which is why the
 protocol itself says to ignore it in HTTPS mode.
 
 - Our server asks every client for a certificate (`AnyClientCert`) and records
@@ -281,7 +298,7 @@ This only happens in a dev build outside Tauri, so the packaged app never shows 
 | `get_identity` | — | `{ alias, fingerprint, deviceModel, deviceType, port }` | Loaded once in `setup` from `identity.json` in the app-data dir |
 | `list_devices` | — | `Device[]` | Current peers. Snapshot; the event is the live feed |
 | `rescan` | — | `Device[]` | Announce burst + `/24` scan. Resolves when the scan finishes (a few seconds) |
-| `respond_to_request` | `sessionId`, `acceptedFileIds` | — | Answers an `incoming-request`. An empty list declines |
+| `respond_to_request` | `sessionId`, `acceptedFileIds`, `trustSender?` | — | Answers an `incoming-request`. An empty list declines; `trustSender` also trusts the device |
 | `get_settings` | — | `{ pin, quickSave }` | |
 | `set_settings` | `settings` | `Settings` | Persists and applies immediately; the server reads the live value |
 | `download_dir` | — | `string` | Where received files land. Not configurable in v1 |
@@ -290,8 +307,9 @@ This only happens in a dev build outside Tauri, so the packaged app never shows 
 | `set_alias` | `alias` | `IdentityInfo` | Renames this device and re-announces at once |
 | `show_in_folder` | `path` | — | Reveals a received file in Finder or Explorer |
 | `list_trusted` | — | `TrustedDevice[]` | The paired devices |
-| `trust_device` | `deviceId` | `TrustedDevice` | Pairs, pinning that device's certificate fingerprint |
-| `untrust_device` | `deviceId` | `bool` | Unpairs |
+| `trust_device` | `deviceId` | `TrustedDevice` | Stops it asking, pinning that device's certificate |
+| `pair_device` | `deviceId`, `paired` | `TrustedDevice` | Adds or removes clipboard sharing |
+| `forget_device` | `deviceId` | `bool` | Forgets it entirely |
 | `send_text` | `deviceId`, `text`, `pin?` | `SendSummary` | Sends text, which lands on the peer's clipboard |
 | `send_clipboard` | `deviceId` | `SendSummary` | Reads the clipboard in Rust and sends it |
 
