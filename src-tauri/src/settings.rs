@@ -12,6 +12,10 @@ pub struct Settings {
     pub pin: Option<String>,
     /// Accept incoming requests without asking. Off by default on purpose.
     pub quick_save: bool,
+    /// Keep the clipboard in step with paired devices: copy here, paste
+    /// there. Off by default, because everything you copy would otherwise
+    /// start leaving this machine the moment you pair with something.
+    pub clipboard_sync: bool,
 }
 
 impl Settings {
@@ -60,6 +64,7 @@ mod tests {
     fn defaults_are_the_safe_end() {
         let settings = Settings::default();
         assert!(!settings.quick_save);
+        assert!(!settings.clipboard_sync);
         assert_eq!(settings.required_pin(), None);
     }
 
@@ -69,6 +74,7 @@ mod tests {
         let settings = Settings {
             pin: Some("123456".into()),
             quick_save: true,
+            clipboard_sync: true,
         };
         settings.save(&dir).unwrap();
         assert_eq!(Settings::load(&dir), settings);
@@ -95,6 +101,7 @@ mod tests {
         let settings = Settings {
             pin: Some(String::new()),
             quick_save: false,
+            ..Settings::default()
         };
         assert_eq!(settings.required_pin(), None);
     }

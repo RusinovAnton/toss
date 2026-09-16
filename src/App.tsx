@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
-import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CenterCircle } from "./components/CenterCircle";
@@ -25,7 +24,7 @@ import {
   listDevices,
   listTrusted,
   onTextReceived,
-  sendText,
+  sendClipboard,
   trustDevice,
   untrustDevice,
   onDevicesChanged,
@@ -58,6 +57,7 @@ const REASONS: Record<string, string> = {
   "connection-lost": "Connection lost",
   cancelled: "Cancelled",
   "pin-required": "PIN needed",
+  "empty-clipboard": "Clipboard empty",
   "unknown-device": "Gone",
   "no-files": "Nothing to send",
 };
@@ -65,7 +65,11 @@ const REASONS: Record<string, string> = {
 export default function App() {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
-  const [settings, setSettings] = useState<Settings>({ pin: null, quickSave: false });
+  const [settings, setSettings] = useState<Settings>({
+    pin: null,
+    quickSave: false,
+    clipboardSync: false,
+  });
   const [size, setSize] = useState(() => Math.min(window.innerWidth, window.innerHeight));
   const radarRef = useRef<HTMLElement | null>(null);
   const [transfers, setTransfers] = useState<Record<string, Transfer>>({});
@@ -76,7 +80,6 @@ export default function App() {
     previewFlag("saved") ? ["/Users/me/Downloads/holiday.zip"] : null,
   );
   const [hovered, setHovered] = useState(-1);
-  const [pending, setPending] = useState<string[] | null>(null);
   const [shaking, setShaking] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(() => previewFlag("settings"));
   const [trusted, setTrusted] = useState<TrustedDevice[]>([]);
@@ -156,11 +159,9 @@ export default function App() {
       onDevicesChanged(setDevices),
       onIncomingRequest(setIncoming),
       onTextReceived((received) => {
-        // Text from a paired device goes straight onto the clipboard, which
-        // is the whole point of pairing.
-        writeText(received.text)
-          .then(() => setNotice(`Copied from ${received.alias ?? "a paired device"}`))
-          .catch(() => setNotice("Could not reach the clipboard"));
+        // The clipboard itself is written in Rust, so the sync loop knows the
+        // text came from elsewhere and does not send it straight back.
+        setNotice(`Copied from ${received.alias ?? "a paired device"}`);
       }),
       onTransferProgress((update) => {
         if (!update.peer) return;
@@ -249,6 +250,9 @@ export default function App() {
       if (payload.type === "drop") {
         setHovered(-1);
         const device = devicesRef.current[index];
+        // Kept because a drop that lands nowhere is the confusing case, and
+        // this is the only way to see where it actually landed.
+        console.info("drop", { x, y, index, alias: device?.alias, paths: payload.paths });
         if (index < 0 || !device) {
           // Dropping on empty space does nothing but say so.
           setShaking(true);
@@ -272,7 +276,6 @@ export default function App() {
         return;
       }
       if (event.key === "Escape") {
-        setPending(null);
         setSettingsOpen(false);
         setMenu(null);
       }
@@ -281,7 +284,7 @@ export default function App() {
         const only = devicesRef.current.find((device) =>
           trustedRef.current.some((entry) => entry.fingerprint === device.fingerprint),
         );
-        if (only) void sendClipboard(only);
+        if (only) void pushClipboard(only);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -319,16 +322,11 @@ export default function App() {
     setNotice(`Unpaired ${device.alias}`);
   }
 
-  async function sendClipboard(device: Device) {
+  async function pushClipboard(device: Device) {
     setMenu(null);
-    const text = await readText().catch(() => null);
-    if (!text) {
-      setNotice("The clipboard is empty");
-      return;
-    }
     setTransfer(device.fingerprint, { phase: "active", progress: 0 });
     try {
-      await sendText(device.fingerprint, text);
+      await sendClipboard(device.fingerprint);
       setTransfer(device.fingerprint, { phase: "done", progress: 1 });
       clearTransferLater(device.fingerprint, FLASH_MS);
       setNotice(`Clipboard sent to ${device.alias}`);
@@ -340,6 +338,7 @@ export default function App() {
         message: REASONS[failure.code ?? ""] ?? "Failed",
       });
       clearTransferLater(device.fingerprint, ERROR_MS);
+      if (failure.code === "empty-clipboard") setNotice("The clipboard is empty");
     }
   }
 
@@ -350,26 +349,13 @@ export default function App() {
     setIncoming(null);
   }
 
-  async function pickFiles() {
-    if (pending) {
-      setPending(null);
-      return;
-    }
-    const picked = await openFilePicker({ multiple: true });
+  /// Clicking a circle asks what to send it. Dragging onto it does the same
+  /// thing without the dialog.
+  async function pickFor(device: Device, directory = false) {
+    setMenu(null);
+    const picked = await openFilePicker({ multiple: true, directory });
     if (!picked) return;
     const paths = Array.isArray(picked) ? picked : [picked];
-    if (devicesRef.current.length === 1) {
-      void send(devicesRef.current[0].fingerprint, paths);
-      return;
-    }
-    // With more than one device around, the next circle clicked gets them.
-    setPending(paths);
-  }
-
-  function onDeviceClick(device: Device) {
-    if (!pending) return;
-    const paths = pending;
-    setPending(null);
     void send(device.fingerprint, paths);
   }
 
@@ -381,12 +367,7 @@ export default function App() {
     >
       <Pulses size={size} />
 
-      <CenterCircle
-        identity={identity}
-        shaking={shaking}
-        armed={pending !== null}
-        onClick={() => void pickFiles()}
-      />
+      <CenterCircle identity={identity} shaking={shaking} />
 
       {devices.map((device, index) => (
         <DeviceCircle
@@ -395,9 +376,8 @@ export default function App() {
           placement={placements[index]}
           transfer={transfers[device.fingerprint] ?? IDLE}
           hovered={hovered === index}
-          armed={pending !== null}
           paired={isPaired(device)}
-          onClick={() => onDeviceClick(device)}
+          onClick={() => void pickFor(device)}
           onMenu={(x, y) => setMenu({ device, x, y })}
         />
       ))}
@@ -408,9 +388,11 @@ export default function App() {
           paired={isPaired(menu.device)}
           x={menu.x}
           y={menu.y}
+          onSendFiles={() => void pickFor(menu.device)}
+          onSendFolder={() => void pickFor(menu.device, true)}
           onPair={() => void pair(menu.device)}
           onUnpair={() => void unpair(menu.device)}
-          onSendClipboard={() => void sendClipboard(menu.device)}
+          onSendClipboard={() => void pushClipboard(menu.device)}
           onClose={() => setMenu(null)}
         />
       )}

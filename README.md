@@ -42,7 +42,9 @@ one you paired with.
 
 ## Install
 
-Download the release for your system, or build it yourself.
+Download the installer for your system from the
+[releases page](../../releases), or build it yourself. Nothing is code-signed
+yet, so both systems will want a word with you the first time.
 
 ### macOS
 
@@ -51,9 +53,12 @@ the first launch needs a right click, then Open.
 
 ### Windows
 
-Run the `.msi`. **The first time Toss runs, Windows asks whether to allow it
-through the firewall.** Say yes for private networks, otherwise no other device
-can reach it and the radar stays empty.
+Run the `.msi`. SmartScreen warns about an unknown publisher: choose **More
+info**, then **Run anyway**.
+
+**The first time Toss runs, Windows asks whether to allow it through the
+firewall.** Say yes for private networks, otherwise no other device can reach
+it and the radar stays empty.
 
 ### Build from source
 
@@ -65,7 +70,16 @@ pnpm install
 pnpm tauri build
 ```
 
-The bundles land in `src-tauri/target/release/bundle/`.
+The bundles land in `src-tauri/target/release/bundle/`. A build only produces
+the formats of the machine it runs on, so Windows installers come from a
+Windows machine or from CI. Tagging a commit does that for you:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+That builds macOS and Windows and leaves a draft release with the installers
+attached.
 
 ## How it relates to LocalSend
 

@@ -343,6 +343,7 @@ async fn a_pin_is_required_when_one_is_set() {
     let harness = harness(Settings {
         pin: Some("123456".into()),
         quick_save: true,
+        ..Settings::default()
     })
     .await;
 

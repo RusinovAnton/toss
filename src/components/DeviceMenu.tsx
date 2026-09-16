@@ -9,6 +9,8 @@ export function DeviceMenu({
   paired,
   x,
   y,
+  onSendFiles,
+  onSendFolder,
   onPair,
   onUnpair,
   onSendClipboard,
@@ -18,6 +20,8 @@ export function DeviceMenu({
   paired: boolean;
   x: number;
   y: number;
+  onSendFiles: () => void;
+  onSendFolder: () => void;
   onPair: () => void;
   onUnpair: () => void;
   onSendClipboard: () => void;
@@ -39,11 +43,12 @@ export function DeviceMenu({
         <p className="truncate px-3 py-1.5 text-[11px]" style={{ color: "var(--muted)" }}>
           {device.alias}
         </p>
+        <Item onClick={onSendFiles}>Send files…</Item>
+        <Item onClick={onSendFolder}>Send a folder…</Item>
+        <Item onClick={onSendClipboard}>Send clipboard</Item>
+        <div className="my-1 h-px" style={{ background: "var(--ring)" }} />
         {paired ? (
-          <>
-            <Item onClick={onSendClipboard}>Send clipboard</Item>
-            <Item onClick={onUnpair}>Unpair</Item>
-          </>
+          <Item onClick={onUnpair}>Unpair</Item>
         ) : (
           <Item onClick={onPair}>Pair with this device</Item>
         )}

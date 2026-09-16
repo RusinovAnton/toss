@@ -3,6 +3,7 @@
 //! All network and filesystem I/O lives here in Rust. The frontend only
 //! calls Tauri commands and listens to events.
 
+pub mod clipboard;
 pub mod discovery;
 pub mod files;
 pub mod identity;
@@ -20,7 +21,9 @@ use session::Decision;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use std::collections::HashSet;
 use tauri::{Emitter, Manager, WindowEvent};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 
 /// Emitted with the full device list whenever it changes.
@@ -34,6 +37,7 @@ pub struct AppState {
     pub sender: Arc<send::SendManager>,
     pub settings: Arc<Mutex<settings::Settings>>,
     pub trusted: Arc<Mutex<trust::TrustStore>>,
+    pub clipboard: Arc<clipboard::ClipboardSync>,
     pub config_dir: PathBuf,
     pub geometry: Mutex<GeometryState>,
 }
@@ -207,10 +211,41 @@ fn untrust_device(state: tauri::State<'_, AppState>, device_id: String) -> Resul
     Ok(removed)
 }
 
+/// Sends whatever is on the clipboard to a device, by hand.
+///
+/// Clipboard sync does this by itself for paired devices; this is for the
+/// one-off case and for devices that are not paired.
+#[tauri::command]
+async fn send_clipboard(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    device_id: String,
+) -> Result<send::SendSummary, send::SendErrorPayload> {
+    let text = app.clipboard().read_text().unwrap_or_default();
+    if text.trim().is_empty() {
+        return Err(send::SendErrorPayload {
+            code: "empty-clipboard".into(),
+            message: "The clipboard is empty".into(),
+        });
+    }
+    // Ours already, so it does not come back as a change to share.
+    state.clipboard.remember(&text);
+    send_text_to(&state, device_id, text, None).await
+}
+
 /// Sends text to a paired device, which lands on its clipboard.
 #[tauri::command]
 async fn send_text(
     state: tauri::State<'_, AppState>,
+    device_id: String,
+    text: String,
+    pin: Option<String>,
+) -> Result<send::SendSummary, send::SendErrorPayload> {
+    send_text_to(&state, device_id, text, pin).await
+}
+
+async fn send_text_to(
+    state: &tauri::State<'_, AppState>,
     device_id: String,
     text: String,
     pin: Option<String>,
@@ -267,6 +302,7 @@ pub fn run() {
             let identity = identity::Identity::load_or_create(&config_dir)?;
             let settings = Arc::new(Mutex::new(settings::Settings::load(&config_dir)));
             let trusted = Arc::new(Mutex::new(trust::TrustStore::load(&config_dir)));
+            let clipboard = Arc::new(clipboard::ClipboardSync::new());
             let sessions = Arc::new(session::SessionManager::new());
             let info: SharedInfo = Arc::new(Mutex::new(identity.to_device_info()));
 
@@ -288,6 +324,7 @@ pub fn run() {
 
             let handle = app.handle().clone();
             let peers = Arc::clone(&discovery);
+            let incoming_clipboard = Arc::clone(&clipboard);
             let server_state = Arc::new(server::ServerState {
                 info: Arc::clone(&info),
                 sessions: Arc::clone(&sessions),
@@ -295,6 +332,17 @@ pub fn run() {
                 trusted: Arc::clone(&trusted),
                 download_dir: default_download_dir(),
                 emit: Arc::new(move |event, payload| {
+                    // Text from another device goes onto the clipboard here
+                    // rather than in the frontend, so the sync loop records
+                    // it as ours and does not bounce it back.
+                    if event == server::TEXT_RECEIVED_EVENT {
+                        if let Some(text) = payload["text"].as_str() {
+                            incoming_clipboard.remember(text);
+                            if let Err(e) = handle.clipboard().write_text(text.to_string()) {
+                                eprintln!("could not write the clipboard: {e}");
+                            }
+                        }
+                    }
                     if let Err(e) = handle.emit(event, payload) {
                         eprintln!("failed to emit {event}: {e}");
                     }
@@ -326,6 +374,15 @@ pub fn run() {
             });
 
             let stored = window::Geometry::load(&config_dir);
+            spawn_clipboard_sync(
+                app.handle().clone(),
+                Arc::clone(&clipboard),
+                Arc::clone(&settings),
+                Arc::clone(&trusted),
+                Arc::clone(&discovery),
+                Arc::clone(&sender),
+            );
+
             app.manage(AppState {
                 identity: Mutex::new(identity),
                 info,
@@ -334,6 +391,7 @@ pub fn run() {
                 sender,
                 settings,
                 trusted,
+                clipboard,
                 config_dir,
                 geometry: Mutex::new(GeometryState {
                     current: stored.unwrap_or_default(),
@@ -373,6 +431,7 @@ pub fn run() {
             respond_to_request,
             send_files,
             send_text,
+            send_clipboard,
             cancel_send,
             list_trusted,
             trust_device,
@@ -384,6 +443,89 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Watches the clipboard and pushes changes to paired devices.
+///
+/// Off unless the user turns it on: pairing a device should not, by itself,
+/// start a copy of everything they copy leaving the machine.
+fn spawn_clipboard_sync(
+    app: tauri::AppHandle,
+    clipboard: Arc<clipboard::ClipboardSync>,
+    settings: Arc<Mutex<settings::Settings>>,
+    trusted: Arc<Mutex<trust::TrustStore>>,
+    discovery: Arc<discovery::Discovery>,
+    sender: Arc<send::SendManager>,
+) {
+    // Devices with a clipboard already on its way, so a slow one does not
+    // collect a queue of stale copies.
+    let in_flight: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+
+    tauri::async_runtime::spawn(async move {
+        let mut ticker = tokio::time::interval(clipboard::POLL_INTERVAL);
+        loop {
+            ticker.tick().await;
+
+            let enabled = settings
+                .lock()
+                .map(|s| s.clipboard_sync)
+                .unwrap_or(false);
+            if !enabled {
+                // Whatever was copied while off is not sent when it comes
+                // back on; only what happens next is.
+                clipboard.reset();
+                continue;
+            }
+
+            let paired: Vec<discovery::Device> = {
+                let store = match trusted.lock() {
+                    Ok(store) => store,
+                    Err(_) => continue,
+                };
+                discovery
+                    .registry
+                    .list()
+                    .into_iter()
+                    .filter(|device| store.is_trusted(&device.fingerprint))
+                    .collect()
+            };
+            if paired.is_empty() {
+                continue;
+            }
+
+            let current = app.clipboard().read_text().ok();
+            let Some(text) = clipboard.take_change(current) else {
+                continue;
+            };
+
+            for device in paired {
+                {
+                    let mut busy = in_flight.lock().expect("clipboard senders poisoned");
+                    if !busy.insert(device.fingerprint.clone()) {
+                        continue;
+                    }
+                }
+                let sender = Arc::clone(&sender);
+                let in_flight = Arc::clone(&in_flight);
+                let text = text.clone();
+                tauri::async_runtime::spawn(async move {
+                    let target = send::Target {
+                        fingerprint: device.fingerprint.clone(),
+                        ip: device.ip.clone(),
+                        port: device.port,
+                        protocol: device.protocol,
+                    };
+                    if let Err(e) = sender.send_text(target, &text, None).await {
+                        eprintln!("clipboard to {}: {e}", device.alias);
+                    }
+                    in_flight
+                        .lock()
+                        .expect("clipboard senders poisoned")
+                        .remove(&device.fingerprint);
+                });
+            }
+        }
+    });
 }
 
 /// Writes the geometry out, at most every [`window::SAVE_INTERVAL`] unless

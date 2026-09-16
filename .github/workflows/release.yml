@@ -1,0 +1,77 @@
+name: Release
+
+# Tag a commit to build installers for every platform:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The run leaves a draft release with the .dmg, .msi and .exe attached, so
+# nothing is published until you look at it and press the button.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple silicon and Intel are separate binaries; Tauri does not make
+          # one that runs on both.
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The macOS bundler drives Finder over AppleScript to lay out the
+          # disk image, which no runner can do. This skips that pass.
+          CI: true
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Toss ${{ github.ref_name }}
+          releaseBody: |
+            Nothing here is code-signed yet.
+
+            **macOS**: open the `.dmg`, drag Toss to Applications, then
+            right-click it and choose Open the first time.
+
+            **Windows**: run the `.msi`. SmartScreen will warn about an
+            unknown publisher: choose More info, then Run anyway. Allow Toss
+            through the firewall on private networks when asked, or no other
+            device can reach it.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

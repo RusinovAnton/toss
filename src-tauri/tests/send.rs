@@ -332,6 +332,7 @@ async fn a_pin_is_asked_for_and_then_accepted() {
     let pair = pair(Settings {
         pin: Some("123456".into()),
         quick_save: true,
+        ..Settings::default()
     })
     .await;
     let path = pair.write("one.txt", b"first");

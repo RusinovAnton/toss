@@ -99,6 +99,20 @@ pnpm dev
   "http://localhost:1420/?theme=dark"
 ```
 
+## Releases
+
+`.github/workflows/ci.yml` runs both test suites on macOS and Windows.
+`.github/workflows/release.yml` builds installers for macOS (Apple silicon and
+Intel) and Windows on a `v*` tag, and leaves a **draft** release with them
+attached, so nothing goes public without a look first:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Nothing is code-signed. Both systems warn on first launch; the release notes in
+the workflow tell users what to click.
+
 ## Packaging
 
 - Bundle identifier `dev.toss.app`, product name `Toss`, minimum macOS 10.15.
@@ -179,9 +193,24 @@ whose `fileType` is `text/*` and whose `preview` holds the text. Toss spots
 that shape and keeps it out of Downloads, emitting `text-received` instead. The
 body is still read and dropped, so the sender sees an ordinary transfer.
 
-In the UI: right-click a circle to pair, unpair or send the clipboard. A paired
-device wears a solid ring. With one device paired, Cmd/Ctrl+Shift+V sends the
-clipboard to it. Incoming text is written to the clipboard automatically.
+**Shared clipboard** (settings, off by default) makes this seamless: a loop in
+`clipboard.rs` watches the clipboard every 700ms and pushes changes to every
+paired device that is currently on the radar. Copy on one machine, paste on the
+other, no menu.
+
+It is off by default on purpose. Pairing a device should not, by itself, start
+a copy of everything you copy leaving the machine, passwords included. One
+toggle turns it on.
+
+Three details keep it sane. Received text is recorded as already-seen before it
+is written, so two devices do not bounce a string forever. Only changes go out.
+Anything over 64KB is skipped. The clipboard is read and written in Rust rather
+than the frontend, which is both where the loop lives and why the webview needs
+no clipboard permission at all.
+
+In the UI: right-click a circle to pair, unpair or push the clipboard by hand.
+A paired device wears a solid ring. With one device paired, Cmd/Ctrl+Shift+V
+sends the clipboard without the menu.
 
 ## The radar
 
@@ -190,9 +219,12 @@ it, eight to a ring, first one at twelve o'clock and clockwise from there. The r
 the window is in the background.
 
 - **Sending**: drag files or folders onto a circle. It grows and its ring turns blue while you
-  hover, and the drop starts the transfer with no confirmation. Dropping on empty space shakes the
-  centre. Clicking the centre opens a file picker; with one peer around it sends straight away,
-  otherwise the next circle you click gets the files.
+  hover, and the drop starts the transfer with no confirmation. Clicking a circle opens a file
+  picker aimed at that device; right-click for a folder picker or the clipboard. Dropping on empty
+  space shakes the centre.
+- **The centre circle does nothing on click.** Every action is aimed at another device, so the
+  actions live on their circles. An earlier build opened a picker there and then asked which
+  device to use, which read as a folder prompt out of nowhere.
 - **Progress** is one arc per circle covering the whole session, not one file, with a percentage
   where the name usually is. Green flash on success, red flash plus a one-word reason otherwise.
 - **Receiving**: a card slides up from the bottom. Enter accepts, Escape denies, and the receiver
@@ -242,6 +274,7 @@ This only happens in a dev build outside Tauri, so the packaged app never shows 
 | `trust_device` | `deviceId` | `TrustedDevice` | Pairs, pinning that device's certificate fingerprint |
 | `untrust_device` | `deviceId` | `bool` | Unpairs |
 | `send_text` | `deviceId`, `text`, `pin?` | `SendSummary` | Sends text, which lands on the peer's clipboard |
+| `send_clipboard` | `deviceId` | `SendSummary` | Reads the clipboard in Rust and sends it |
 
 `send_files` rejects with `{ code, message }`. Codes: `declined`, `busy`, `pin-required`,
 `cancelled`, `connection-lost`, `no-files`, `too-many-requests`, `io-error`, `protocol-error`,

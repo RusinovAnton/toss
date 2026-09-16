@@ -90,6 +90,20 @@ export function SettingsPanel({
               }
             />
           </label>
+
+          <label className="mt-2 flex items-center justify-between">
+            <span style={{ color: "var(--muted)" }}>Shared clipboard</span>
+            <input
+              type="checkbox"
+              checked={settings.clipboardSync}
+              onChange={(event) =>
+                onSettings({ ...settings, clipboardSync: event.target.checked })
+              }
+            />
+          </label>
+          <p className="mt-1 text-[10px] leading-snug" style={{ color: "var(--muted)" }}>
+            Copy here, paste on a paired device.
+          </p>
         </div>
       )}
     </>

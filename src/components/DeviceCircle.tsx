@@ -23,7 +23,6 @@ export function DeviceCircle({
   placement,
   transfer,
   hovered,
-  armed,
   paired,
   onClick,
   onMenu,
@@ -33,8 +32,6 @@ export function DeviceCircle({
   transfer: Transfer;
   /** Files are being dragged over this circle. */
   hovered: boolean;
-  /** Waiting for a target after the file picker. */
-  armed: boolean;
   /** Paired: accepted without asking, and the clipboard flows both ways. */
   paired: boolean;
   onClick: () => void;
@@ -58,7 +55,7 @@ export function DeviceCircle({
         transform: `translate(-50%, -50%) scale(${hovered ? 1.15 : 1})`,
         transition: "left 300ms ease, top 300ms ease, transform 200ms ease",
       }}
-      title={device.deviceModel ?? device.deviceType}
+      title={`Click to send files to ${device.alias}, or drop them here`}
     >
       <span
         className="relative flex items-center justify-center rounded-full"
@@ -81,7 +78,7 @@ export function DeviceCircle({
             cy={ARC_BOX / 2}
             r={ARC_RADIUS}
             fill="none"
-            strokeWidth={hovered || armed || paired ? 2 : 1}
+            strokeWidth={hovered || paired ? 2 : 1}
             className={
               transfer.phase === "done"
                 ? "flash-ok"
@@ -92,9 +89,8 @@ export function DeviceCircle({
             style={{
               // A paired device wears a solid ring, so pairing is visible
               // without opening anything.
-              stroke:
-                hovered || armed || paired ? "var(--accent)" : "var(--ring)",
-              opacity: paired && !hovered && !armed ? 0.7 : 1,
+              stroke: hovered || paired ? "var(--accent)" : "var(--ring)",
+              opacity: paired && !hovered ? 0.7 : 1,
               transition: "stroke 150ms ease",
             }}
           />

@@ -53,6 +53,8 @@ export function rescan(): Promise<Device[]> {
 export interface Settings {
   pin: string | null;
   quickSave: boolean;
+  /** Copy here, paste on a paired device. Off by default. */
+  clipboardSync: boolean;
 }
 
 export interface IncomingFile {
@@ -141,6 +143,11 @@ export function trustDevice(deviceId: string): Promise<TrustedDevice> {
 
 export function untrustDevice(deviceId: string): Promise<boolean> {
   return invoke<boolean>("untrust_device", { deviceId });
+}
+
+/** Sends whatever is on the clipboard to a device, by hand. */
+export function sendClipboard(deviceId: string): Promise<SendSummary> {
+  return invoke<SendSummary>("send_clipboard", { deviceId });
 }
 
 /** Sends text to a paired device, landing on its clipboard. */
