@@ -345,6 +345,18 @@ impl Discovery {
         tauri::async_runtime::spawn(async move { this.scan_subnet().await });
     }
 
+    /// Records a peer that contacted us, e.g. one that answered our announce
+    /// by calling `/register` on our own server.
+    pub fn register_peer(&self, info: DeviceInfo, ip: IpAddr) {
+        let IpAddr::V4(ip) = ip else { return };
+        if self
+            .registry
+            .upsert(Device::from_announce(&info, ip, now_ms()))
+        {
+            self.emit();
+        }
+    }
+
     fn emit(&self) {
         let devices = self.registry.list();
         let summary: Vec<&str> = devices.iter().map(|d| d.alias.as_str()).collect();

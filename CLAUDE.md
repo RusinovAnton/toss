@@ -40,6 +40,11 @@ cd src-tauri && cargo test         # Rust unit tests
 - `src-tauri/src/identity.rs` — alias, rcgen cert, fingerprint, `identity.json` persistence
 - `src-tauri/src/protocol.rs` — LocalSend v2 wire types (announce, register request/response)
 - `src-tauri/src/discovery.rs` — multicast announce/listen, `/24` scan, device registry
+- `src-tauri/src/server.rs` — axum HTTPS server, the five routes, TLS listener
+- `src-tauri/src/session.rs` — one-at-a-time receive session, tokens, accept/decline
+- `src-tauri/src/files.rs` — file name validation and collision suffixes
+- `src-tauri/src/settings.rs` — `settings.json` (PIN, Quick Save)
+- `src-tauri/tests/receive.rs` — the receive routes end to end over plain HTTP
 - `src-tauri/tauri.conf.json` — window (480x480, min 360), identifier `dev.toss.app`
 - `src-tauri/capabilities/default.json` — permissions for the `main` window
 
@@ -53,6 +58,19 @@ cd src-tauri && cargo test         # Rust unit tests
 - The official app holds TCP 53317 while it runs. Our Phase 3 server cannot bind that port on the
   same machine at the same time; test the two against each other from two machines, or stop one.
   UDP 53317 is shared fine, both use `SO_REUSEPORT`.
+
+## Receive behaviour worth knowing
+
+- Nothing is written before the user accepts. The handler parks on a channel that
+  `respond_to_request` feeds; Quick Save short-circuits it.
+- Names are validated before a session is even created. `..`, absolute paths, Windows drive
+  letters, NUL bytes and reserved device names (`NUL`, `COM1`, ...) are refused with `400`.
+  Relative folders are kept, so folder sends preserve their structure.
+- Collisions never overwrite: `cat.png`, `cat (1).png`, `cat (2).png`. The file is created with
+  `create_new`, so two parallel uploads cannot both claim the same name.
+- A failed, cancelled or checksum-mismatched transfer deletes its partial file.
+- Settings are cached in memory. Editing `settings.json` by hand needs an app restart;
+  `set_settings` applies at once.
 
 ## Rules
 
@@ -71,6 +89,10 @@ cd src-tauri && cargo test         # Rust unit tests
 | `get_identity` | — | `{ alias, fingerprint, deviceModel, deviceType, port }` | Loaded once in `setup` from `identity.json` in the app-data dir |
 | `list_devices` | — | `Device[]` | Current peers. Snapshot; the event is the live feed |
 | `rescan` | — | `Device[]` | Announce burst + `/24` scan. Resolves when the scan finishes (a few seconds) |
+| `respond_to_request` | `sessionId`, `acceptedFileIds` | — | Answers an `incoming-request`. An empty list declines |
+| `get_settings` | — | `{ pin, quickSave }` | |
+| `set_settings` | `settings` | `Settings` | Persists and applies immediately; the server reads the live value |
+| `download_dir` | — | `string` | Where received files land. Not configurable in v1 |
 
 Frontend wrappers live in `src/lib/tauri.ts`. Always call through them, never `invoke` directly in components.
 
@@ -79,6 +101,9 @@ Frontend wrappers live in `src/lib/tauri.ts`. Always call through them, never `i
 | Event | Payload | When |
 |---|---|---|
 | `devices-changed` | `Device[]` | A peer appears, changes address/alias, or ages out. A pure last-seen refresh does not fire it |
+| `incoming-request` | `{ sessionId, sender, files, totalSize }` | A peer asked to send. Answer with `respond_to_request` within 60s or it is declined |
+| `transfer-progress` | `{ sessionId, fileId, fileName, bytesReceived, totalBytes, direction }` | At most every 100ms per file, plus a final one. A single-chunk file produces exactly one |
+| `session-finished` | `{ sessionId, status, savedTo?, files? }` | `status` is `completed`, `cancelled` or `declined` |
 
 `Device` = `{ fingerprint, alias, deviceModel, deviceType, ip, port, protocol, download, lastSeen }`.
 `fingerprint` is the stable id.
@@ -114,6 +139,11 @@ Facts verified against the protocol repo and official app source (`packages/core
   require it. Our HTTP client always presents ours.
 - Peers use self-signed certificates, so certificate verification is off by design on our client.
   Trust comes from the fingerprint, which is what the official app pins too.
+- **`prepare-upload` blocks** until the user answers. That is by design: the response body is the
+  token map, so there is nothing to send before the decision. We time out at 60s and decline.
+- **Status codes we return**: `200` accepted, `204` no files offered, `400` bad body or unsafe
+  file name, `401` PIN required or wrong, `403` declined / bad token / wrong sender IP,
+  `409` another session holds the receiver, `422` sha256 mismatch, `500` disk error.
 - **Captured from LocalSend 1.18 on macOS** (2026-09-16), its announce datagram verbatim:
 
   ```json
@@ -128,7 +158,7 @@ Facts verified against the protocol repo and official app source (`packages/core
 - [x] Phase 0 — Scaffold
 - [x] Phase 1 — Identity and certificate
 - [x] Phase 2 — Discovery
-- [ ] Phase 3 — Receive
+- [x] Phase 3 — Receive
 - [ ] Phase 4 — Send
 - [ ] Phase 5 — UI (radar)
 - [ ] Phase 6 — Packaging

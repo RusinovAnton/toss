@@ -5,6 +5,7 @@
 //! official app's Rust core. Nothing here may be invented.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 
 /// Protocol version we announce. 2.2 is what app 1.18+ speaks.
@@ -102,10 +103,22 @@ pub struct DeviceInfo {
     /// SHA-256 of the certificate in HTTPS mode; ignored by peers there, but
     /// still sent because the protocol requires the field.
     pub fingerprint: String,
+    /// Senders always send these two, but defaults keep a sloppy client from
+    /// failing the whole request.
+    #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default = "default_protocol")]
     pub protocol: ProtocolType,
     #[serde(default)]
     pub download: bool,
+}
+
+fn default_port() -> u16 {
+    DEFAULT_PORT
+}
+
+fn default_protocol() -> ProtocolType {
+    ProtocolType::Https
 }
 
 /// An announce datagram: a [`DeviceInfo`] plus the `announce` flag.
@@ -141,6 +154,51 @@ pub struct RegisterResponse {
     pub protocol: Option<ProtocolType>,
     #[serde(default)]
     pub download: bool,
+}
+
+/// One file inside a `prepare-upload` request.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDto {
+    pub id: String,
+    /// May carry a relative path for folder sends, e.g. `photos/cat.png`.
+    pub file_name: String,
+    pub size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_type: Option<String>,
+    /// Lowercase hex. When present the receiver must verify it and answer
+    /// `422` on a mismatch (protocol 2.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<FileMetadata>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accessed: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareUploadRequest {
+    pub info: DeviceInfo,
+    /// Keyed by file id. The key repeats the `id` inside each entry.
+    pub files: HashMap<String, FileDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareUploadResponse {
+    pub session_id: String,
+    /// file id -> token, one token per accepted file.
+    pub files: HashMap<String, String>,
 }
 
 #[cfg(test)]
@@ -213,6 +271,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(msg.device.device_type, Some(DeviceType::Desktop));
+    }
+
+    #[test]
+    fn parses_prepare_upload_from_the_protocol_doc() {
+        let request: PrepareUploadRequest = serde_json::from_str(
+            r#"{"info":{"alias":"Nice Orange","version":"2.0","deviceModel":"Samsung",
+                 "deviceType":"mobile","fingerprint":"f","port":53317,"protocol":"https",
+                 "download":true},
+                "files":{"some file id":{"id":"some file id","fileName":"my image.png",
+                 "size":324242,"fileType":"image/jpeg","sha256":"hash","preview":"data",
+                 "metadata":{"modified":"2021-01-01T12:34:56Z"}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(request.info.alias, "Nice Orange");
+        let file = &request.files["some file id"];
+        assert_eq!(file.file_name, "my image.png");
+        assert_eq!(file.size, 324242);
+        assert_eq!(file.sha256.as_deref(), Some("hash"));
+        assert_eq!(
+            request.files["some file id"].metadata.as_ref().unwrap().modified.as_deref(),
+            Some("2021-01-01T12:34:56Z")
+        );
+    }
+
+    #[test]
+    fn prepare_upload_response_uses_session_id_key() {
+        let mut files = HashMap::new();
+        files.insert("fileId".to_string(), "token".to_string());
+        let json = serde_json::to_value(PrepareUploadResponse {
+            session_id: "s1".into(),
+            files,
+        })
+        .unwrap();
+        assert_eq!(json["sessionId"], "s1");
+        assert_eq!(json["files"]["fileId"], "token");
     }
 
     #[test]

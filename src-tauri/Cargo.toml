@@ -27,9 +27,13 @@ sha2 = "0.11.0"
 rand = "0.10.2"
 uuid = { version = "1.26.1", features = ["v4"] }
 rustls-pki-types = "1.15.1"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "net", "sync", "time", "macros"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "fs", "io-util"] }
 socket2 = { version = "0.6.5", features = ["all"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["http2", "json", "rustls", "stream"] }
+axum = "0.8.9"
+tokio-rustls = "0.26.5"
+dirs = "7.0.0"
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
