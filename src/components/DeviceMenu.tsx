@@ -6,24 +6,32 @@ import type { Device } from "../lib/tauri";
  */
 export function DeviceMenu({
   device,
+  trusted,
   paired,
   x,
   y,
   onSendFiles,
   onSendFolder,
+  onTrust,
   onPair,
   onUnpair,
+  onForget,
   onSendClipboard,
   onClose,
 }: {
   device: Device;
+  /** Transfers from it are accepted without asking. */
+  trusted: boolean;
+  /** Trusted, and the clipboard flows both ways. */
   paired: boolean;
   x: number;
   y: number;
   onSendFiles: () => void;
   onSendFolder: () => void;
+  onTrust: () => void;
   onPair: () => void;
   onUnpair: () => void;
+  onForget: () => void;
   onSendClipboard: () => void;
   onClose: () => void;
 }) {
@@ -47,11 +55,13 @@ export function DeviceMenu({
         <Item onClick={onSendFolder}>Send a folder…</Item>
         <Item onClick={onSendClipboard}>Send clipboard</Item>
         <div className="my-1 h-px" style={{ background: "var(--ring)" }} />
+        {!trusted && <Item onClick={onTrust}>Trust, and stop asking</Item>}
         {paired ? (
-          <Item onClick={onUnpair}>Unpair</Item>
+          <Item onClick={onUnpair}>Stop sharing the clipboard</Item>
         ) : (
-          <Item onClick={onPair}>Pair with this device</Item>
+          <Item onClick={onPair}>Pair, and share the clipboard</Item>
         )}
+        {trusted && <Item onClick={onForget}>Forget this device</Item>}
       </div>
     </>
   );

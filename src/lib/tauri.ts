@@ -52,7 +52,6 @@ export function rescan(): Promise<Device[]> {
 
 export interface Settings {
   pin: string | null;
-  quickSave: boolean;
   /** Copy here, paste on a paired device. Off by default. */
   clipboardSync: boolean;
   /** Start with the machine, in the menu bar rather than on screen. */
@@ -107,12 +106,19 @@ export interface SessionFinished {
   files?: string[];
 }
 
-/** Answers an incoming request. An empty list declines it. */
+/**
+ * Answers an incoming request. An empty list declines it.
+ *
+ * `trustSender` also trusts the device, so it never asks again. Trust is
+ * granted against the certificate from the handshake, so a sender with none
+ * is quietly not trusted.
+ */
 export function respondToRequest(
   sessionId: string,
   acceptedFileIds: string[],
+  trustSender = false,
 ): Promise<void> {
-  return invoke("respond_to_request", { sessionId, acceptedFileIds });
+  return invoke("respond_to_request", { sessionId, acceptedFileIds, trustSender });
 }
 
 export interface TrustedDevice {
@@ -120,6 +126,8 @@ export interface TrustedDevice {
   fingerprint: string;
   alias: string;
   trustedAt: number;
+  /** Paired as well as trusted, so the clipboard may flow. */
+  paired: boolean;
 }
 
 export interface TextReceived {
@@ -135,16 +143,22 @@ export function listTrusted(): Promise<TrustedDevice[]> {
 }
 
 /**
- * Pairs with a device. Its requests are then accepted without asking, and
- * clipboard text can flow both ways. The certificate is pinned, so a device
- * that later presents a different one is refused rather than trusted.
+ * Trusts a device, so its transfers are accepted without asking. The
+ * certificate is pinned, so a device that later presents a different one is
+ * refused rather than trusted.
  */
 export function trustDevice(deviceId: string): Promise<TrustedDevice> {
   return invoke<TrustedDevice>("trust_device", { deviceId });
 }
 
-export function untrustDevice(deviceId: string): Promise<boolean> {
-  return invoke<boolean>("untrust_device", { deviceId });
+/** Pairs a device, which trusts it and lets the clipboard flow. */
+export function pairDevice(deviceId: string, paired: boolean): Promise<TrustedDevice> {
+  return invoke<TrustedDevice>("pair_device", { deviceId, paired });
+}
+
+/** Forgets a device entirely. */
+export function forgetDevice(deviceId: string): Promise<boolean> {
+  return invoke<boolean>("forget_device", { deviceId });
 }
 
 /** Sends whatever is on the clipboard to a device, by hand. */

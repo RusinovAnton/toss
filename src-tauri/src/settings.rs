@@ -10,8 +10,6 @@ const FILE_NAME: &str = "settings.json";
 pub struct Settings {
     /// When set, senders must pass `?pin=` on `prepare-upload`.
     pub pin: Option<String>,
-    /// Accept incoming requests without asking. Off by default on purpose.
-    pub quick_save: bool,
     /// Keep the clipboard in step with paired devices: copy here, paste
     /// there. Off by default, because everything you copy would otherwise
     /// start leaving this machine the moment you pair with something.
@@ -65,7 +63,6 @@ mod tests {
     #[test]
     fn defaults_are_the_safe_end() {
         let settings = Settings::default();
-        assert!(!settings.quick_save);
         assert!(!settings.clipboard_sync);
         assert!(!settings.start_at_login);
         assert_eq!(settings.required_pin(), None);
@@ -76,7 +73,6 @@ mod tests {
         let dir = temp_dir();
         let settings = Settings {
             pin: Some("123456".into()),
-            quick_save: true,
             clipboard_sync: true,
             start_at_login: true,
         };
@@ -104,7 +100,6 @@ mod tests {
     fn empty_pin_means_no_pin() {
         let settings = Settings {
             pin: Some(String::new()),
-            quick_save: false,
             ..Settings::default()
         };
         assert_eq!(settings.required_pin(), None);
@@ -113,10 +108,25 @@ mod tests {
     #[test]
     fn partial_json_keeps_other_defaults() {
         let dir = temp_dir();
-        std::fs::write(Settings::file_path(&dir), br#"{"quickSave":true}"#).unwrap();
+        std::fs::write(Settings::file_path(&dir), br#"{"clipboardSync":true}"#).unwrap();
         let loaded = Settings::load(&dir);
-        assert!(loaded.quick_save);
+        assert!(loaded.clipboard_sync);
         assert_eq!(loaded.pin, None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_setting_that_no_longer_exists_is_ignored() {
+        // Quick Save was dropped in favour of trusting a device from the
+        // card; an old settings file must still load.
+        let dir = temp_dir();
+        std::fs::write(
+            Settings::file_path(&dir),
+            br#"{"quickSave":true,"clipboardSync":true}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&dir);
+        assert!(loaded.clipboard_sync);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

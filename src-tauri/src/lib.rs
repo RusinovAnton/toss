@@ -105,7 +105,28 @@ fn respond_to_request(
     state: tauri::State<'_, AppState>,
     session_id: String,
     accepted_file_ids: Vec<String>,
+    trust_sender: Option<bool>,
 ) -> Result<(), String> {
+    // Trusting from the card is how a device earns "no more questions", so
+    // it is granted against the fingerprint the handshake proved, not the one
+    // the sender wrote in its request.
+    if trust_sender.unwrap_or(false) {
+        if let Some(sender) = state.sessions.pending_sender(&session_id) {
+            match sender.verified_fingerprint {
+                Some(fingerprint) => {
+                    let mut trusted = state.trusted.lock().map_err(|e| e.to_string())?;
+                    trusted.trust(&fingerprint, &sender.alias);
+                    trusted.save(&state.config_dir).map_err(|e| e.to_string())?;
+                }
+                // Without a certificate there is nothing to remember, and
+                // trusting the claim would trust anyone who copies it.
+                None => eprintln!(
+                    "not trusting {}: it presented no certificate",
+                    sender.alias
+                ),
+            }
+        }
+    }
     let decision = if accepted_file_ids.is_empty() {
         Decision::Decline
     } else {
@@ -206,37 +227,67 @@ fn list_trusted(state: tauri::State<'_, AppState>) -> Result<Vec<trust::TrustedD
     Ok(state.trusted.lock().map_err(|e| e.to_string())?.list())
 }
 
-/// Pairs with a discovered device, so its requests are accepted without
-/// asking and clipboard text can flow both ways.
+/// Trusts a discovered device, so its transfers are accepted without asking.
 ///
 /// The fingerprint is pinned: from now on that device has to present the same
-/// certificate, and a device that does not is refused rather than trusted.
+/// certificate, and one that does not is refused rather than trusted.
 #[tauri::command]
 fn trust_device(
     state: tauri::State<'_, AppState>,
     device_id: String,
 ) -> Result<trust::TrustedDevice, String> {
-    let device = state
-        .discovery
-        .registry
-        .find(&device_id)
-        .ok_or_else(|| "That device is no longer around".to_string())?;
+    let (fingerprint, alias) = known_device(&state, &device_id)?;
     let mut trusted = state.trusted.lock().map_err(|e| e.to_string())?;
     let entry = trusted
-        .trust(&device.fingerprint, &device.alias)
+        .trust(&fingerprint, &alias)
+        .ok_or_else(|| "That device has no fingerprint to trust".to_string())?;
+    trusted.save(&state.config_dir).map_err(|e| e.to_string())?;
+    Ok(entry)
+}
+
+/// Pairs a device, which trusts it and lets clipboard text flow when the
+/// shared clipboard is on. `paired: false` steps it back to merely trusted.
+#[tauri::command]
+fn pair_device(
+    state: tauri::State<'_, AppState>,
+    device_id: String,
+    paired: bool,
+) -> Result<trust::TrustedDevice, String> {
+    let (fingerprint, alias) = known_device(&state, &device_id)?;
+    let mut trusted = state.trusted.lock().map_err(|e| e.to_string())?;
+    let entry = trusted
+        .set_paired(&fingerprint, &alias, paired)
         .ok_or_else(|| "That device has no fingerprint to pair with".to_string())?;
     trusted.save(&state.config_dir).map_err(|e| e.to_string())?;
     Ok(entry)
 }
 
+/// Forgets a device: no longer trusted, no longer paired.
 #[tauri::command]
-fn untrust_device(state: tauri::State<'_, AppState>, device_id: String) -> Result<bool, String> {
+fn forget_device(state: tauri::State<'_, AppState>, device_id: String) -> Result<bool, String> {
     let mut trusted = state.trusted.lock().map_err(|e| e.to_string())?;
-    let removed = trusted.untrust(&device_id);
+    let removed = trusted.forget(&device_id);
     if removed {
         trusted.save(&state.config_dir).map_err(|e| e.to_string())?;
     }
     Ok(removed)
+}
+
+/// The fingerprint and name of a device, from the radar or from what is
+/// already known about it. A device that has gone quiet can still be
+/// unpaired.
+fn known_device(
+    state: &tauri::State<'_, AppState>,
+    device_id: &str,
+) -> Result<(String, String), String> {
+    if let Some(device) = state.discovery.registry.find(device_id) {
+        return Ok((device.fingerprint, device.alias));
+    }
+    let trusted = state.trusted.lock().map_err(|e| e.to_string())?;
+    trusted
+        .get(device_id)
+        .map(|known| (known.fingerprint.clone(), known.alias.clone()))
+        .ok_or_else(|| "That device is no longer around".to_string())
 }
 
 /// Sends whatever is on the clipboard to a device, by hand.
@@ -480,7 +531,8 @@ pub fn run() {
             cancel_send,
             list_trusted,
             trust_device,
-            untrust_device,
+            pair_device,
+            forget_device,
             get_settings,
             set_settings,
             download_dir,
@@ -531,7 +583,9 @@ fn spawn_clipboard_sync(
                     .registry
                     .list()
                     .into_iter()
-                    .filter(|device| store.is_trusted(&device.fingerprint))
+                    // Trusted is not enough: the clipboard is what pairing is
+                    // for.
+                    .filter(|device| store.is_paired(&device.fingerprint))
                     .collect()
             };
             if paired.is_empty() {

@@ -99,12 +99,9 @@ impl ServerState {
             .map(str::to_string)
     }
 
-    fn quick_save(&self) -> bool {
-        self.settings.lock().expect("settings poisoned").quick_save
-    }
-
-    /// Whether the handshake proved this is a device we have paired with.
-    fn is_paired(&self, peer: &Peer) -> bool {
+    /// Whether the handshake proved this is a device the user has trusted,
+    /// which is what lets a transfer through without asking.
+    fn is_trusted(&self, peer: &Peer) -> bool {
         let Some(fingerprint) = &peer.fingerprint else {
             return false;
         };
@@ -112,6 +109,18 @@ impl ServerState {
             .lock()
             .expect("trust store poisoned")
             .is_trusted(fingerprint)
+    }
+
+    /// Whether it is paired, which is the stronger step that lets clipboard
+    /// text through. Trusting a device does not hand over the clipboard.
+    fn is_paired(&self, peer: &Peer) -> bool {
+        let Some(fingerprint) = &peer.fingerprint else {
+            return false;
+        };
+        self.trusted
+            .lock()
+            .expect("trust store poisoned")
+            .is_paired(fingerprint)
     }
 }
 
@@ -160,9 +169,10 @@ async fn prepare_upload(
         return StatusCode::NO_CONTENT.into_response();
     }
 
-    // A single text file carrying its text in `preview` is a message, not a
-    // transfer: it belongs on the clipboard rather than in Downloads.
-    let message = text_message_of(&request.files);
+    // A single text file carrying its text in `preview` is a message. It only
+    // becomes clipboard text for a paired device; from anyone else it is an
+    // ordinary file, because the clipboard is what pairing is for.
+    let message = text_message_of(&request.files).filter(|_| state.is_paired(&peer));
 
     // Validate every name before anything else: a request carrying one bad
     // path is not a request we want to half-accept.
@@ -183,37 +193,34 @@ async fn prepare_upload(
     }
 
     let session_id = uuid::Uuid::new_v4().to_string();
-    let receiver = match state.sessions.begin(&session_id) {
-        Ok(receiver) => receiver,
-        Err(_) => return StatusCode::CONFLICT.into_response(),
-    };
-
     let sender_fingerprint = request.info.fingerprint.clone();
     let sender = PeerSender {
         alias: request.info.alias.clone(),
         fingerprint: request.info.fingerprint.clone(),
+        verified_fingerprint: peer.fingerprint.clone(),
         device_model: request.info.device_model.clone(),
         ip: peer.ip(),
     };
+    let receiver = match state.sessions.begin(&session_id, sender.clone()) {
+        Ok(receiver) => receiver,
+        Err(_) => return StatusCode::CONFLICT.into_response(),
+    };
 
-    let paired = state.is_paired(&peer);
-    let quick_save = state.quick_save();
+    let trusted = state.is_trusted(&peer);
     eprintln!(
         "prepare-upload from {} ({}): {} file(s), {}",
         request.info.alias,
         peer.ip(),
         offered.len(),
-        if paired {
-            "paired device"
-        } else if quick_save {
-            "quick save on"
+        if trusted {
+            "trusted device"
         } else {
             "asking the user"
         }
     );
-    // A paired device is one the user has already vouched for, proved by the
+    // A trusted device is one the user has already vouched for, proved by the
     // certificate in the handshake, so it does not ask again.
-    let decision = if paired || quick_save {
+    let decision = if trusted {
         state.sessions.clear_pending(&session_id);
         Decision::Accept(offered.iter().map(|f| f.id.clone()).collect())
     } else {
