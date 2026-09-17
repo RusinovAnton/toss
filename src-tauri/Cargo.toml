@@ -1,6 +1,6 @@
 [package]
 name = "toss"
-version = "0.1.2"
+version = "0.1.5"
 description = "LocalSend-compatible file transfer with a radar UI"
 authors = ["Toss contributors"]
 edition = "2021"

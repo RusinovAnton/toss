@@ -24,12 +24,14 @@ function edit(path, pattern, replacement) {
   writeFileSync(path, after);
 }
 
+// `\r?\n` throughout: the Windows runner checks the repository out with CRLF
+// line endings, and a pattern spanning lines finds nothing without it.
 edit("package.json", /("version":\s*")[^"]+(")/, `$1${version}$2`);
-edit("src-tauri/Cargo.toml", /(\nversion = ")[^"]+(")/, `$1${version}$2`);
+edit("src-tauri/Cargo.toml", /(\r?\nversion = ")[^"]+(")/, `$1${version}$2`);
 // Keeping the lock file in step means a build never has to rewrite it.
 edit(
   "src-tauri/Cargo.lock",
-  /(\[\[package\]\]\nname = "toss"\nversion = ")[^"]+(")/,
+  /(\[\[package\]\]\r?\nname = "toss"\r?\nversion = ")[^"]+(")/,
   `$1${version}$2`,
 );
 
