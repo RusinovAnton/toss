@@ -389,7 +389,16 @@ export default function App() {
   /// thing without the dialog.
   async function pickFor(device: Device, directory = false) {
     setMenu(null);
-    const picked = await openFilePicker({ multiple: true, directory });
+    let picked;
+    try {
+      picked = await openFilePicker({ multiple: true, directory });
+    } catch (error) {
+      // A picker that refuses to open used to fail in complete silence, which
+      // looks exactly like a click that did nothing.
+      console.error("file picker failed", error);
+      setNotice(`Could not open the picker: ${error}`);
+      return;
+    }
     if (!picked) return;
     const paths = Array.isArray(picked) ? picked : [picked];
     void send(device.fingerprint, paths);

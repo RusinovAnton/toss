@@ -60,6 +60,22 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Releasing $version"
 
+      # A tag pushed onto an older commit builds that older code, which is how
+      # a release ships without the fix it was cut for. Say so rather than
+      # building it.
+      - name: A tag must sit on the newest commit
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin "${{ github.event.repository.default_branch }}"
+          tagged=$(git rev-parse HEAD)
+          newest=$(git rev-parse FETCH_HEAD)
+          if [ "$tagged" != "$newest" ]; then
+            echo "::error::$GITHUB_REF_NAME points at $tagged, but ${{ github.event.repository.default_branch }} is at $newest. Move the tag or tag the newest commit."
+            exit 1
+          fi
+
   build:
     needs: version
     permissions:
@@ -73,12 +89,19 @@ jobs:
           - platform: macos-latest
             target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
+            # "-" is codesign's ad-hoc identity: a signature with no
+            # certificate behind it. It does not stop Gatekeeper asking, but it
+            # makes the bundle internally consistent, which is what the system
+            # checks before handing an app services like the file picker.
+            signing: "-"
           - platform: macos-latest
             target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin
+            signing: "-"
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             args: ""
+            signing: ""
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -113,6 +136,8 @@ jobs:
           # The macOS bundler drives Finder over AppleScript to lay out the
           # disk image, which no runner can do. This skips that pass.
           CI: true
+          # Empty on Windows, where the bundler ignores it anyway.
+          APPLE_SIGNING_IDENTITY: ${{ matrix.signing }}
         with:
           tagName: v${{ needs.version.outputs.version }}
           releaseName: Toss v${{ needs.version.outputs.version }}

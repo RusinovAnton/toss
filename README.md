@@ -52,8 +52,17 @@ yet, so both systems will want a word with you the first time.
 
 ### macOS
 
-Open the `.dmg` and drag Toss to Applications. The build is not notarised, so
-the first launch needs a right click, then Open.
+Open the `.dmg` and drag Toss to Applications. The build is signed ad-hoc
+rather than notarised, so macOS wants a word first.
+
+If the first launch says **"Toss is damaged and can't be opened"**, that is the
+quarantine flag your browser put on the download, not a broken file. Clear it:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Toss.app
+```
+
+Then open it normally. On older macOS a right click, then **Open**, is enough.
 
 ### Windows
 
