@@ -1,18 +1,66 @@
 name: Release
 
-# Tag a commit to build installers for every platform:
+# Two ways to cut a release, neither of which needs a version bumped by hand:
 #
-#   git tag v0.1.0 && git push origin v0.1.0
+#   git tag v0.1.2 && git push origin v0.1.2   # the tag names the release
+#   Actions -> Release -> Run workflow          # a blank version bumps the patch
+#
+# Either way the run writes that version into package.json, Cargo.toml and the
+# lock file before building, so the installers are named after the release
+# rather than after whatever the repository happened to say.
 #
 # The run leaves a draft release with the .dmg, .msi and .exe attached, so
-# nothing is published until you look at it and press the button.
+# nothing is published until you look at it and press the button. A draft's tag
+# is only created when you publish it, so a dispatched release adds no tag
+# until then.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.2.0. Blank bumps the patch number of the newest tag."
+        required: false
+        type: string
 
 jobs:
+  # One job decides the number so all three builds agree on it.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags are needed to work out what the newest release was.
+          fetch-depth: 0
+
+      - id: pick
+        shell: bash
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          elif [ -n "$REQUESTED" ]; then
+            version="${REQUESTED#v}"
+          else
+            latest=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+            latest="${latest#v}"
+            [ -n "$latest" ] || latest=$(node -p "require('./package.json').version")
+            IFS=. read -r major minor patch <<< "$latest"
+            version="$major.$minor.$((patch + 1))"
+          fi
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::not a version: $version"; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version"
+
   build:
+    needs: version
     permissions:
       contents: write
     strategy:
@@ -53,19 +101,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # The bundle version comes from package.json, not from the tag, so a
-      # tag pushed without a version bump produces installers named after the
-      # previous release. Fail here instead of shipping that.
-      - name: The tag must match the version
-        if: startsWith(github.ref, 'refs/tags/v')
+      # After the install, so the lock file check sees the version it expects.
+      - name: Write the release version into the manifests
         shell: bash
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          package=$(node -p "require('./package.json').version")
-          crate=$(grep -m1 '^version = ' src-tauri/Cargo.toml | cut -d'"' -f2)
-          echo "tag $tag, package.json $package, Cargo.toml $crate"
-          test "$tag" = "$package" || { echo "::error::tag v$tag does not match package.json $package"; exit 1; }
-          test "$tag" = "$crate" || { echo "::error::tag v$tag does not match Cargo.toml $crate"; exit 1; }
+        run: node scripts/set-version.mjs "${{ needs.version.outputs.version }}"
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -74,13 +113,14 @@ jobs:
           # disk image, which no runner can do. This skips that pass.
           CI: true
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Toss ${{ github.ref_name }}
+          tagName: v${{ needs.version.outputs.version }}
+          releaseName: Toss v${{ needs.version.outputs.version }}
           releaseBody: |
             Nothing here is code-signed yet.
 
             **macOS**: open the `.dmg`, drag Toss to Applications, then
-            right-click it and choose Open the first time.
+            right-click it and choose Open the first time. Apple silicon is the
+            `aarch64` image, Intel is the `x64` one.
 
             **Windows**: run the `.msi`. SmartScreen will warn about an
             unknown publisher: choose More info, then Run anyway. Allow Toss

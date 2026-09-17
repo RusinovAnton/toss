@@ -111,16 +111,19 @@ Intel) and Windows on a `v*` tag, and leaves a **draft** release with them
 attached, so nothing goes public without a look first:
 
 ```bash
-# bump the version first, then tag the commit that carries the bump
-git tag v0.1.1 && git push origin v0.1.1
+git tag v0.1.2 && git push origin v0.1.2
 ```
 
-**The tag does not set the version.** Bundle file names come from `version` in
-`package.json`, which `src-tauri/tauri.conf.json` points at, so a tag pushed
-without a bump produces installers named after the previous release. Bump
-`package.json` and `src-tauri/Cargo.toml` (and the `toss` entry in
-`Cargo.lock`) in one commit, tag that commit, and the release job's
-"The tag must match the version" step fails the build if they ever drift.
+Or run the workflow from the Actions tab: a blank version bumps the patch
+number of the newest tag, and a draft's tag is only created when the draft is
+published.
+
+**The tag names the release, and nothing is bumped by hand.** The run writes
+that version into `package.json`, `src-tauri/Cargo.toml` and `Cargo.lock`
+before building (`scripts/set-version.mjs`), and `src-tauri/tauri.conf.json`
+reads its version from `package.json`. Bundle names therefore always match the
+release. The version committed in the repository only matters for local
+builds, so it lags between releases; run the script to move it on.
 
 Nothing is code-signed. Both systems warn on first launch; the release notes in
 the workflow tell users what to click.
