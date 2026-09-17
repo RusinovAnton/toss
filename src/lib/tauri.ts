@@ -104,6 +104,8 @@ export interface SessionFinished {
   reason?: string;
   savedTo?: string;
   files?: string[];
+  /** `text` when the session carried clipboard text, which saves no files. */
+  kind?: "text";
 }
 
 /**

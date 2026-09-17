@@ -24,7 +24,6 @@ import {
   listDevices,
   forgetDevice,
   listTrusted,
-  onTextReceived,
   pairDevice,
   sendClipboard,
   trustDevice,
@@ -178,11 +177,6 @@ export default function App() {
         setIncoming(request);
         setTrustSender(false);
       }),
-      onTextReceived((received) => {
-        // The clipboard itself is written in Rust, so the sync loop knows the
-        // text came from elsewhere and does not send it straight back.
-        setNotice(`Copied from ${received.alias ?? "a paired device"}`);
-      }),
       onTransferProgress((update) => {
         if (!update.peer) return;
         const total = Math.max(update.sessionTotal, 1);
@@ -208,7 +202,14 @@ export default function App() {
             clearTransferLater(finished.peer, ERROR_MS);
           }
         }
-        if (finished.direction === "receive" && finished.status === "completed") {
+        // Clipboard text saves nothing, so the "saved to Downloads" card would
+        // be a lie. A paired clipboard is meant to be silent: the text is
+        // already on the clipboard by the time this arrives.
+        if (
+          finished.direction === "receive" &&
+          finished.status === "completed" &&
+          finished.kind !== "text"
+        ) {
           setSaved(finished.files ?? []);
         }
       }),

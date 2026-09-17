@@ -276,7 +276,8 @@ the window is in the background.
   where the name usually is. Green flash on success, red flash plus a one-word reason otherwise.
 - **Receiving**: a card slides up from the bottom. Enter accepts, Escape denies, and the receiver
   declines by itself after a minute. Quick Save skips the card. When it lands, the card offers
-  "Show" to reveal the files in Finder.
+  "Show" to reveal the files in Finder. Clipboard text from a paired device shows nothing at all:
+  it saves no file, so the card would be claiming something that did not happen.
 - **Settings** live behind the gear: name, PIN, Quick Save. Nothing else in v1.
 - The window is always square, at least 360px, and remembers where it was. Geometry is written at
   most every two seconds while dragging, so a crash still leaves a recent position behind.
@@ -338,7 +339,7 @@ Frontend wrappers live in `src/lib/tauri.ts`. Always call through them, never `i
 | `incoming-request` | `{ sessionId, sender, files, totalSize }` | A peer asked to send. Answer with `respond_to_request` within 60s or it is declined |
 | `transfer-progress` | `{ sessionId, fileId, fileName, bytesReceived, totalBytes, direction }` | At most every 100ms per file, plus a final one. A single-chunk file produces exactly one |
 | `session-finished` | `{ sessionId, status, savedTo?, files?, direction?, reason?, kind? }` | `status` is `completed`, `cancelled`, `declined` or `error`. Sends carry `direction: "send"`, messages carry `kind: "text"` |
-| `text-received` | `{ sessionId, peer, alias, text }` | A message arrived. The UI writes it to the clipboard |
+| `text-received` | `{ sessionId, peer, alias, text }` | A message arrived. Rust has already written it to the clipboard; the UI shows nothing, because a shared clipboard is meant to be silent |
 
 `Device` = `{ fingerprint, alias, deviceModel, deviceType, ip, port, protocol, download, lastSeen }`.
 `fingerprint` is the stable id.
