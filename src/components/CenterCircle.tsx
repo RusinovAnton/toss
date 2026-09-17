@@ -11,10 +11,13 @@ import type { IdentityInfo } from "../lib/tauri";
 export function CenterCircle({
   identity,
   shaking,
+  wobble,
 }: {
   identity: IdentityInfo | null;
   /** Something was dropped on empty space. */
   shaking: boolean;
+  /** How far the last knock pushed it off the middle, in pixels. */
+  wobble: { x: number; y: number };
 }) {
   return (
     <div
@@ -24,7 +27,8 @@ export function CenterCircle({
       style={{
         width: CENTER_DIAMETER,
         height: CENTER_DIAMETER,
-        transform: "translate(-50%, -50%)",
+        // It never leaves the middle; a shove only leans it a few pixels.
+        transform: `translate(calc(-50% + ${wobble.x}px), calc(-50% + ${wobble.y}px))`,
         background: "var(--surface)",
         boxShadow: `0 3px 18px var(--shadow)`,
         border: "1px solid var(--ring)",

@@ -67,7 +67,7 @@ export function pulseScale(size: number): number {
 
 /** The device circle under a pointer, or -1. Generous by a few pixels. */
 export function hitTest(
-  placements: Placement[],
+  placements: { x: number; y: number }[],
   x: number,
   y: number,
   radius = DEVICE_DIAMETER / 2 + 8,

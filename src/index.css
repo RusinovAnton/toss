@@ -91,18 +91,28 @@ body.unfocused .pulse {
 }
 
 @keyframes toss-appear {
-  from {
+  0% {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.6);
+    transform: translate(-50%, -50%) scale(0.3);
   }
-  to {
+  55% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.14);
+  }
+  78% {
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+  100% {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
   }
 }
 
+/* Overshoot and settle, so a device arriving reads as landing rather than
+   fading in. The animation owns `transform` while it runs, which is why the
+   hover scale only takes over once it is done. */
 .device-appear {
-  animation: toss-appear 200ms ease-out both;
+  animation: toss-appear 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 @keyframes toss-shake {

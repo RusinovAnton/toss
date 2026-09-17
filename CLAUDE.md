@@ -62,6 +62,8 @@ cd src-tauri && cargo test         # Rust unit tests
 - `src/lib/` — pure TS helpers (formatting, geometry); unit-tested
 - `src/lib/tauri.ts` — typed wrappers for every Tauri command / event
 - `src/lib/radar.ts` — orbit geometry and drag hit testing; unit-tested
+- `src/lib/physics.ts` — the circles' inertia, collisions and the centre's wobble; unit-tested
+- `src/hooks/useRadarPhysics.ts` — the loop that runs them, and the pointer drag
 - `src/lib/device.ts` — device emoji and OS guessing; unit-tested
 - `src/lib/preview.ts` — dev-only sample data, see Previewing the UI below
 - `src/components/` — the radar: circles, pulses, cards, settings
@@ -269,6 +271,11 @@ the window is in the background.
   hover, and the drop starts the transfer with no confirmation. Clicking a circle opens a file
   picker aimed at that device; right-click for a folder picker or the clipboard. Dropping on empty
   space shakes the centre.
+- **The circles are yours to throw.** Grab one and it follows the pointer; let go and it keeps the
+  speed, slows down, bounces off the window edges and knocks the others out of the way. The centre
+  never moves, but a knock leans it a few pixels and it springs back. A press that travels more
+  than 5px is a throw rather than a click, so a throw never opens the picker. The loop stops
+  itself once everything is still, so a quiet radar costs no frames.
 - **The centre circle does nothing on click.** Every action is aimed at another device, so the
   actions live on their circles. An earlier build opened a picker there and then asked which
   device to use, which read as a folder prompt out of nowhere.

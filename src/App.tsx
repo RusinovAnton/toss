@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -17,7 +17,8 @@ import {
   PREVIEW_REQUEST,
   PREVIEW_TEXT_REQUEST,
 } from "./lib/preview";
-import { hitTest, placeDevices } from "./lib/radar";
+import { useRadarPhysics } from "./hooks/useRadarPhysics";
+import { hitTest } from "./lib/radar";
 import {
   getIdentity,
   getSettings,
@@ -91,11 +92,11 @@ export default function App() {
   /// Ticked on the card: accept, and stop asking about this device.
   const [trustSender, setTrustSender] = useState(false);
 
-  const placements = useMemo(() => placeDevices(devices.length, size), [devices.length, size]);
-  // Drag events arrive outside React, so the hit test reads the latest
-  // placements through a ref rather than a stale closure.
-  const placementsRef = useRef(placements);
-  placementsRef.current = placements;
+  // The circles are thrown around by hand, so where they are is physics, not
+  // layout. Drag events arrive outside React, so the hit test reads the live
+  // positions through a ref rather than a stale closure.
+  const { positions, positionsRef, wobble, grab, wasDragged } = useRadarPhysics(devices, size);
+  const [held, setHeld] = useState<string | null>(null);
   const devicesRef = useRef(devices);
   devicesRef.current = devices;
   const trustedRef = useRef(trusted);
@@ -264,7 +265,7 @@ export default function App() {
       const ratio = window.devicePixelRatio || 1;
       const x = payload.position.x / ratio;
       const y = payload.position.y / ratio;
-      const index = hitTest(placementsRef.current, x, y);
+      const index = hitTest(positionsRef.current, x, y);
 
       if (payload.type === "over" || payload.type === "enter") {
         setHovered(index);
@@ -415,18 +416,35 @@ export default function App() {
     >
       <Pulses size={size} />
 
-      <CenterCircle identity={identity} shaking={shaking} />
+      <CenterCircle identity={identity} shaking={shaking} wobble={wobble} />
 
       {devices.map((device, index) => (
         <DeviceCircle
           key={device.fingerprint}
           device={device}
-          placement={placements[index]}
+          position={positions[index] ?? { x: size / 2, y: size / 2 }}
           transfer={transfers[device.fingerprint] ?? IDLE}
           hovered={hovered === index}
           trusted={isTrusted(device)}
           paired={isPaired(device)}
-          onClick={() => void pickFor(device)}
+          held={held === device.fingerprint}
+          onGrab={(event) => {
+            setHeld(device.fingerprint);
+            grab(device.fingerprint, event);
+            const done = () => {
+              setHeld(null);
+              window.removeEventListener("pointerup", done);
+              window.removeEventListener("pointercancel", done);
+            };
+            window.addEventListener("pointerup", done);
+            window.addEventListener("pointercancel", done);
+          }}
+          // A throw ends in a click event too; only a press that stayed put
+          // should open the picker.
+          onClick={() => {
+            if (wasDragged()) return;
+            void pickFor(device);
+          }}
           onMenu={(x, y) => setMenu({ device, x, y })}
         />
       ))}

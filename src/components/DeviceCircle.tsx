@@ -1,5 +1,5 @@
 import { deviceEmoji, osFromModel } from "../lib/device";
-import { DEVICE_DIAMETER, type Placement } from "../lib/radar";
+import { DEVICE_DIAMETER } from "../lib/radar";
 import type { Device } from "../lib/tauri";
 import { OsBadge } from "./OsBadge";
 
@@ -20,16 +20,19 @@ const CIRCUMFERENCE = 2 * Math.PI * ARC_RADIUS;
 
 export function DeviceCircle({
   device,
-  placement,
+  position,
   transfer,
   hovered,
   trusted,
   paired,
+  held,
   onClick,
   onMenu,
+  onGrab,
 }: {
   device: Device;
-  placement: Placement;
+  /** Where the simulation currently has this circle. */
+  position: { x: number; y: number };
   transfer: Transfer;
   /** Files are being dragged over this circle. */
   hovered: boolean;
@@ -37,8 +40,11 @@ export function DeviceCircle({
   trusted: boolean;
   /** Paired: accepted without asking, and the clipboard flows both ways. */
   paired: boolean;
+  /** Being dragged right now. */
+  held: boolean;
   onClick: () => void;
   onMenu: (x: number, y: number) => void;
+  onGrab: (event: React.PointerEvent<HTMLElement>) => void;
 }) {
   const active = transfer.phase === "active";
   const percentage = Math.round(transfer.progress * 100);
@@ -49,16 +55,22 @@ export function DeviceCircle({
       onClick={onClick}
       onContextMenu={(event) => {
         event.preventDefault();
-        onMenu(placement.x, placement.y);
+        onMenu(position.x, position.y);
       }}
+      onPointerDown={onGrab}
       className="device-appear absolute flex flex-col items-center outline-none"
       style={{
-        left: placement.x,
-        top: placement.y,
-        transform: `translate(-50%, -50%) scale(${hovered ? 1.15 : 1})`,
-        transition: "left 300ms ease, top 300ms ease, transform 200ms ease",
+        left: position.x,
+        top: position.y,
+        // No transition on left/top: the simulation moves these every frame,
+        // and easing on top of it reads as lag.
+        transform: `translate(-50%, -50%) scale(${held ? 1.08 : hovered ? 1.15 : 1})`,
+        transition: "transform 200ms ease",
+        cursor: held ? "grabbing" : "grab",
+        // Or the browser starts its own drag and the pointer events stop.
+        touchAction: "none",
       }}
-      title={`${device.alias} at ${device.ip} — click to send files, or drop them here`}
+      title={`${device.alias} at ${device.ip} — click to send files, drop them here, or drag it around`}
     >
       <span
         className="relative flex items-center justify-center rounded-full"
