@@ -278,7 +278,9 @@ the window is in the background.
   declines by itself after a minute. Quick Save skips the card. When it lands, the card offers
   "Show" to reveal the files in Finder. Clipboard text from a paired device shows nothing at all:
   it saves no file, so the card would be claiming something that did not happen.
-- **Settings** live behind the gear: name, PIN, Quick Save. Nothing else in v1.
+- **Settings** live behind the gear: name, PIN, Quick Save, and a rescan. The rescan empties the
+  radar first, so a device that has already left goes now rather than a minute later; the menu on
+  a circle names its address, which is the only way to tell two similar circles apart.
 - The window is always square, at least 360px, and remembers where it was. Geometry is written at
   most every two seconds while dragging, so a crash still leaves a recent position behind.
 
@@ -309,7 +311,7 @@ This only happens in a dev build outside Tauri, so the packaged app never shows 
 |---|---|---|---|
 | `get_identity` | — | `{ alias, fingerprint, deviceModel, deviceType, port }` | Loaded once in `setup` from `identity.json` in the app-data dir |
 | `list_devices` | — | `Device[]` | Current peers. Snapshot; the event is the live feed |
-| `rescan` | — | `Device[]` | Announce burst + `/24` scan. Resolves when the scan finishes (a few seconds) |
+| `rescan` | — | `Device[]` | Empties the list, then announce burst + `/24` scan. Resolves when the scan finishes (a few seconds) |
 | `respond_to_request` | `sessionId`, `acceptedFileIds`, `trustSender?` | — | Answers an `incoming-request`. An empty list declines; `trustSender` also trusts the device |
 | `get_settings` | — | `{ pin, quickSave }` | |
 | `set_settings` | `settings` | `Settings` | Persists and applies immediately; the server reads the live value |

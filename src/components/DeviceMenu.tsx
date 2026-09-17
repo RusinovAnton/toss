@@ -48,8 +48,12 @@ export function DeviceMenu({
           boxShadow: "0 4px 24px var(--shadow)",
         }}
       >
-        <p className="truncate px-3 py-1.5 text-[11px]" style={{ color: "var(--muted)" }}>
+        <p className="truncate px-3 pt-1.5 text-[11px]" style={{ color: "var(--muted)" }}>
           {device.alias}
+        </p>
+        {/* The address, because "which circle is this?" has no other answer. */}
+        <p className="truncate px-3 pb-1.5 text-[10px]" style={{ color: "var(--muted)", opacity: 0.7 }}>
+          {device.ip}:{device.port}
         </p>
         <Item onClick={onSendFiles}>Send files…</Item>
         <Item onClick={onSendFolder}>Send a folder…</Item>

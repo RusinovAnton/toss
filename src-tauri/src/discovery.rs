@@ -160,6 +160,20 @@ impl Registry {
         devices.len() != before
     }
 
+    /// Forgets every device.
+    ///
+    /// Only a rescan does this. A peer that has quietly gone away otherwise
+    /// lingers until it ages out, and one that answers from a stale entry's
+    /// address keeps that entry alive indefinitely, which is what a ghost on
+    /// the radar is. Clearing first means the list is rebuilt from whatever
+    /// actually answers this time.
+    pub fn clear(&self) -> bool {
+        let mut devices = self.devices.lock().expect("registry poisoned");
+        let had_any = !devices.is_empty();
+        devices.clear();
+        had_any
+    }
+
     /// Looks a device up by its fingerprint, which is its id.
     pub fn find(&self, fingerprint: &str) -> Option<Device> {
         let devices = self.devices.lock().expect("registry poisoned");
@@ -535,7 +549,14 @@ impl Discovery {
     }
 
     /// Announce burst plus a subnet scan, for the user-triggered rescan.
+    ///
+    /// The list is emptied first, so anything that no longer answers is gone
+    /// from the radar within the few seconds the scan takes rather than after
+    /// the 60s timeout.
     pub async fn rescan(self: &Arc<Self>) {
+        if self.registry.clear() {
+            self.emit();
+        }
         let announce = {
             let this = Arc::clone(self);
             tauri::async_runtime::spawn(async move { this.announce_burst().await })
@@ -599,6 +620,15 @@ mod tests {
     fn empty_fingerprint_is_ignored() {
         let registry = Registry::new("SELF".into());
         assert!(!registry.upsert(device("", "Nameless", 1000)));
+        assert!(registry.list().is_empty());
+    }
+
+    #[test]
+    fn clearing_empties_the_list_and_says_whether_it_had_to() {
+        let registry = Registry::new("SELF".into());
+        assert!(!registry.clear());
+        registry.upsert(device("A", "Alpha", 1000));
+        assert!(registry.clear());
         assert!(registry.list().is_empty());
     }
 

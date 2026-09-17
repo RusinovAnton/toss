@@ -58,7 +58,7 @@ export function DeviceCircle({
         transform: `translate(-50%, -50%) scale(${hovered ? 1.15 : 1})`,
         transition: "left 300ms ease, top 300ms ease, transform 200ms ease",
       }}
-      title={`Click to send files to ${device.alias}, or drop them here`}
+      title={`${device.alias} at ${device.ip} — click to send files, or drop them here`}
     >
       <span
         className="relative flex items-center justify-center rounded-full"
