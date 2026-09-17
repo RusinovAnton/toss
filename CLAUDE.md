@@ -111,8 +111,16 @@ Intel) and Windows on a `v*` tag, and leaves a **draft** release with them
 attached, so nothing goes public without a look first:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+# bump the version first, then tag the commit that carries the bump
+git tag v0.1.1 && git push origin v0.1.1
 ```
+
+**The tag does not set the version.** Bundle file names come from `version` in
+`package.json`, which `src-tauri/tauri.conf.json` points at, so a tag pushed
+without a bump produces installers named after the previous release. Bump
+`package.json` and `src-tauri/Cargo.toml` (and the `toss` entry in
+`Cargo.lock`) in one commit, tag that commit, and the release job's
+"The tag must match the version" step fails the build if they ever drift.
 
 Nothing is code-signed. Both systems warn on first launch; the release notes in
 the workflow tell users what to click.
