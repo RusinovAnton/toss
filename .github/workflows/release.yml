@@ -46,7 +46,8 @@ jobs:
           elif [ -n "$REQUESTED" ]; then
             version="${REQUESTED#v}"
           else
-            latest=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+            # sed rather than head: head closing the pipe early would trip pipefail.
+            latest=$(git tag -l 'v*' --sort=-v:refname | sed -n 1p)
             latest="${latest#v}"
             [ -n "$latest" ] || latest=$(node -p "require('./package.json').version")
             IFS=. read -r major minor patch <<< "$latest"
