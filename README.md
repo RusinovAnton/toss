@@ -98,6 +98,9 @@ Windows machine or from CI. Tagging a commit does that for you:
 scripts/draft_release          # or --minor, or --major
 ```
 
+Symlink it onto your PATH (`sudo ln -s "$PWD/scripts/draft_release"
+/usr/local/bin/draft_release`) and it is `draft_release` from anywhere.
+
 It pulls the default branch, works out the next version from the newest tag
 and asks before pushing it. That builds macOS and Windows and leaves a draft
 release with the installers attached.

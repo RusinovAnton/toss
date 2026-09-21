@@ -126,10 +126,12 @@ It switches to the default branch, fast-forwards it, works out the next
 version from the newest tag, shows the commit it is about to tag and asks
 before pushing. `--yes` skips the question, `--dry-run` stops before the tag.
 A failed push deletes the local tag, so a retry does not trip over "already
-exists". Put it on the PATH once and it is a command anywhere:
+exists". Put it on the PATH once and `draft_release` works from any directory:
+it follows its own symlink back to this repository rather than using the one
+you are standing in.
 
 ```bash
-ln -s "$PWD/scripts/draft_release" /usr/local/bin/draft_release
+sudo ln -s "$PWD/scripts/draft_release" /usr/local/bin/draft_release
 ```
 
 The plain `git tag v0.1.9 && git push origin v0.1.9` still works, and so does
