@@ -68,30 +68,31 @@ input {
    friends, and a same-named @keyframes silently replaces ours. */
 @keyframes toss-wave {
   from {
-    transform: scale(1);
-    opacity: 0.6;
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.55;
   }
   to {
-    transform: scale(var(--pulse-scale, 5));
+    transform: translate(-50%, -50%) scale(var(--pulse-scale, 5));
     opacity: 0;
   }
 }
 
+/* The whole ring is scaled, border and all, so the line thickens on its way
+   out instead of staying hairline. `backwards` keeps a ring at its starting
+   opacity during its delay, instead of the full-strength base style, which
+   read as a hard ring sitting on the circle for the first cycle. */
 .pulse {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-  transform-box: view-box;
-  transform-origin: center;
-  /* `backwards` keeps a ring at its starting opacity during its delay,
-     instead of the full-strength base style, which read as a hard ring
-     sitting on the circle for the first cycle. The duration comes from
-     `PULSE_SECONDS`, which also spaces the three rings out. */
-  animation: toss-wave var(--pulse-duration, 4s) linear infinite backwards;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border: 1px solid var(--accent);
+  border-radius: 9999px;
+  animation-name: toss-wave;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-fill-mode: backwards;
 }
 
-/* Cheap when the window is in the background, and less distracting. */
 body.unfocused .pulse {
   animation-play-state: paused;
 }

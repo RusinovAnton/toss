@@ -291,6 +291,12 @@ One window, no chrome. This device sits in the middle with blue rings pulsing ou
 it, eight to a ring, first one at twelve o'clock and clockwise from there. The rings pause while
 the window is in the background.
 
+**The rings are scaled boxes, not SVG circles.** The SVG version scaled a `<circle>` about a
+percentage transform origin, which the Windows webview resolved differently from WebKit, and the
+animation was broken there. A `<span>` with a border scales identically everywhere, and its
+border thickens as it grows, so a ring gets heavier the further out it travels. One ring leaves
+every `PULSE_SECONDS / 3`.
+
 - **Sending**: drag files or folders onto a circle. It grows and its ring turns blue while you
   hover, and the drop starts the transfer with no confirmation. Clicking a circle opens a file
   picker aimed at that device; right-click for a folder picker or the clipboard. Dropping on empty

@@ -63,10 +63,11 @@ export function placeDevices(count: number, size: number): Placement[] {
 /**
  * How long one pulse ring takes to cross the window.
  *
- * The CSS reads it as `--pulse-duration` and the three rings are spaced a
- * third of it apart, so one is always on its way out.
+ * Each ring's duration and delay are set from this, the three spaced a third
+ * of it apart, so one is always on its way out. Slow on purpose: at four
+ * seconds the radar read as busy rather than as breathing.
  */
-export const PULSE_SECONDS = 4;
+export const PULSE_SECONDS = 7;
 
 /** How far the pulse rings grow: from the centre circle's edge to the corner. */
 export function pulseScale(size: number): number {
