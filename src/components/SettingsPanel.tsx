@@ -10,8 +10,6 @@ export function SettingsPanel({
   onToggle,
   onAlias,
   onSettings,
-  onRescan,
-  scanning,
 }: {
   open: boolean;
   alias: string;
@@ -21,9 +19,6 @@ export function SettingsPanel({
   onToggle: () => void;
   onAlias: (alias: string) => void;
   onSettings: (settings: Settings) => void;
-  onRescan: () => void;
-  /** A scan is running, which takes a few seconds. */
-  scanning: boolean;
 }) {
   const [draftAlias, setDraftAlias] = useState(alias);
   const [draftPin, setDraftPin] = useState(settings.pin ?? "");
@@ -114,25 +109,6 @@ export function SettingsPanel({
           </label>
           <p className="mt-1 text-[10px] leading-snug" style={{ color: "var(--muted)" }}>
             Closing the window leaves Toss in the menu bar.
-          </p>
-
-          <button
-            type="button"
-            onClick={onRescan}
-            disabled={scanning}
-            className="mt-3 w-full rounded-lg py-1 text-[11px]"
-            style={{
-              background: "var(--bg)",
-              border: "1px solid var(--ring)",
-              color: "var(--muted)",
-              opacity: scanning ? 0.6 : 1,
-            }}
-          >
-            {scanning ? "Looking…" : "Rescan the network"}
-          </button>
-          <p className="mt-1 text-[10px] leading-snug" style={{ color: "var(--muted)" }}>
-            Empties the radar and finds everyone again, which clears a device
-            that has already left.
           </p>
 
           {version && (

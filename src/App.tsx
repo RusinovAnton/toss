@@ -18,6 +18,7 @@ import {
   PREVIEW_TEXT_REQUEST,
 } from "./lib/preview";
 import { useRadarPhysics } from "./hooks/useRadarPhysics";
+import { dropPoint } from "./lib/drop";
 import { hitTest } from "./lib/radar";
 import {
   getIdentity,
@@ -25,7 +26,6 @@ import {
   listDevices,
   forgetDevice,
   listTrusted,
-  rescan,
   pairDevice,
   sendClipboard,
   trustDevice,
@@ -88,7 +88,6 @@ export default function App() {
   const [trusted, setTrusted] = useState<TrustedDevice[]>([]);
   const [menu, setMenu] = useState<{ device: Device; x: number; y: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [scanning, setScanning] = useState(false);
   /// Ticked on the card: accept, and stop asking about this device.
   const [trustSender, setTrustSender] = useState(false);
 
@@ -262,9 +261,11 @@ export default function App() {
         setHovered(-1);
         return;
       }
-      const ratio = window.devicePixelRatio || 1;
-      const x = payload.position.x / ratio;
-      const y = payload.position.y / ratio;
+      const { x, y } = dropPoint(
+        payload.position,
+        navigator.userAgent,
+        window.devicePixelRatio,
+      );
       const index = hitTest(positionsRef.current, x, y);
 
       if (payload.type === "over" || payload.type === "enter") {
@@ -456,6 +457,7 @@ export default function App() {
           paired={isPaired(menu.device)}
           x={menu.x}
           y={menu.y}
+          size={size}
           onSendFiles={() => void pickFor(menu.device)}
           onSendFolder={() => void pickFor(menu.device, true)}
           onTrust={() => void trust(menu.device)}
@@ -505,14 +507,6 @@ export default function App() {
           onSettings={(next) => {
             setSettings(next);
             setSettingsCommand(next).then(setSettings).catch(console.error);
-          }}
-          scanning={scanning}
-          onRescan={() => {
-            setScanning(true);
-            rescan()
-              .then(setDevices)
-              .catch((error) => setNotice(String(error)))
-              .finally(() => setScanning(false));
           }}
         />
       )}

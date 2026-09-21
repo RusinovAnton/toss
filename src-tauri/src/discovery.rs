@@ -7,8 +7,8 @@
 //!    hears an announce answers with `POST /api/localsend/v2/register`. We do
 //!    the same for the announces we hear, falling back to a UDP answer when
 //!    the HTTP call fails.
-//! 2. Subnet scan. `rescan()` probes `/register` on every host of the local
-//!    /24, which needs no multicast at all.
+//! 2. Subnet scan. Every minute, `/register` is probed on every host of the
+//!    local /24, which needs no multicast at all.
 //!
 //! The official app requires a client certificate on every HTTPS request, so
 //! our HTTP client always presents ours.
@@ -26,7 +26,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 
 /// Devices not heard from within this window are dropped from the list.
-pub const DEVICE_TIMEOUT: Duration = Duration::from_secs(60);
+///
+/// Short on purpose: a peer that walks off the network should leave the radar
+/// while the user is still looking at it. `REFRESH_INTERVAL` gives a peer that
+/// is still there three chances to answer inside the window.
+pub const DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How often we re-announce ourselves.
 pub const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(10);
 /// An announce burst repeats the datagram: a single one is easily lost, and a
@@ -46,8 +50,15 @@ const PRUNE_INTERVAL: Duration = Duration::from_secs(5);
 /// How often known devices are re-probed to keep their last-seen fresh.
 ///
 /// The official app announces on startup and on user refresh, not on a timer,
-/// so without this a still-present peer would age out after 60s.
-const REFRESH_INTERVAL: Duration = Duration::from_secs(20);
+/// so without this a still-present peer would age out.
+const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+/// How often the local /24 is swept again.
+///
+/// Multicast is blocked on plenty of networks, and this is the only way a peer
+/// there is ever found. It used to need the user to press Rescan; a scan is
+/// cheap enough to simply keep doing, and the radar then fills and empties by
+/// itself.
+const SCAN_INTERVAL: Duration = Duration::from_secs(60);
 const RECEIVE_BUFFER_SIZE: usize = 65536;
 pub const REGISTER_PATH: &str = "/api/localsend/v2/register";
 
@@ -162,11 +173,11 @@ impl Registry {
 
     /// Forgets every device.
     ///
-    /// Only a rescan does this. A peer that has quietly gone away otherwise
-    /// lingers until it ages out, and one that answers from a stale entry's
-    /// address keeps that entry alive indefinitely, which is what a ghost on
-    /// the radar is. Clearing first means the list is rebuilt from whatever
-    /// actually answers this time.
+    /// Only the `rescan` command does this. A peer that has quietly gone away
+    /// otherwise leaves once it ages out, and one that answers from a stale
+    /// entry's address keeps that entry alive indefinitely, which is what a
+    /// ghost on the radar is. Clearing first means the list is rebuilt from
+    /// whatever actually answers this time.
     pub fn clear(&self) -> bool {
         let mut devices = self.devices.lock().expect("registry poisoned");
         let had_any = !devices.is_empty();
@@ -364,9 +375,16 @@ impl Discovery {
             }
         });
 
-        // A scan on startup finds peers even where multicast is blocked.
+        // Scanning finds peers even where multicast is blocked: once at
+        // startup, and then on a timer, so nobody has to ask for it.
         let this = Arc::clone(self);
-        tauri::async_runtime::spawn(async move { this.scan_subnet().await });
+        tauri::async_runtime::spawn(async move {
+            let mut ticker = tokio::time::interval(SCAN_INTERVAL);
+            loop {
+                ticker.tick().await;
+                this.scan_subnet().await;
+            }
+        });
     }
 
     /// Records a peer that contacted us, e.g. one that answered our announce
@@ -548,11 +566,12 @@ impl Discovery {
         while tasks.join_next().await.is_some() {}
     }
 
-    /// Announce burst plus a subnet scan, for the user-triggered rescan.
+    /// Announce burst plus a subnet scan, emptying the list first.
     ///
-    /// The list is emptied first, so anything that no longer answers is gone
-    /// from the radar within the few seconds the scan takes rather than after
-    /// the 60s timeout.
+    /// The loops in `start` keep the radar current on their own, so nothing in
+    /// the UI calls this. It stays because a sweep that rebuilds the list from
+    /// whatever answers right now is the only way to shift a ghost: an entry
+    /// kept alive by something else answering at its address.
     pub async fn rescan(self: &Arc<Self>) {
         if self.registry.clear() {
             self.emit();

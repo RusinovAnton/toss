@@ -1,3 +1,5 @@
+import { useLayoutEffect, useRef, useState } from "react";
+import { MENU_WIDTH, menuPosition } from "../lib/menu";
 import type { Device } from "../lib/tauri";
 
 /**
@@ -10,6 +12,7 @@ export function DeviceMenu({
   paired,
   x,
   y,
+  size,
   onSendFiles,
   onSendFolder,
   onTrust,
@@ -26,6 +29,8 @@ export function DeviceMenu({
   paired: boolean;
   x: number;
   y: number;
+  /** The window's side, which the menu has to stay inside of. */
+  size: number;
   onSendFiles: () => void;
   onSendFolder: () => void;
   onTrust: () => void;
@@ -35,15 +40,28 @@ export function DeviceMenu({
   onSendClipboard: () => void;
   onClose: () => void;
 }) {
+  const box = useRef<HTMLDivElement>(null);
+  // Which items are shown depends on trust, so the height is measured rather
+  // than assumed. It is unknown for the first frame, which is what the
+  // opacity below hides.
+  const [height, setHeight] = useState(0);
+  useLayoutEffect(() => {
+    setHeight(box.current?.offsetHeight ?? 0);
+  }, [device.fingerprint, trusted, paired]);
+
+  const { left, top } = menuPosition({ x, y }, { width: MENU_WIDTH, height }, size);
+
   return (
     <>
       <div className="absolute inset-0" onClick={onClose} onContextMenu={onClose} />
       <div
-        className="absolute w-44 overflow-hidden rounded-xl py-1 text-[12px]"
+        ref={box}
+        className="absolute overflow-hidden rounded-xl py-1 text-[12px]"
         style={{
-          left: Math.min(x, 9999),
-          top: y,
-          transform: "translate(-50%, 8px)",
+          left,
+          top,
+          width: MENU_WIDTH,
+          opacity: height ? 1 : 0,
           background: "var(--surface)",
           boxShadow: "0 4px 24px var(--shadow)",
         }}
