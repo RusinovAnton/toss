@@ -29,6 +29,20 @@ describe("integrate", () => {
     expect(thrown.vx).toBe(0);
   });
 
+  it("lands close to where a throw let go of it", () => {
+    // 200px/s is about what a brisk flick hands over once the throw is
+    // scaled down, and it should stop within half a second and half a
+    // circle's travel, not glide on across the radar.
+    const thrown = body({ vx: 200 });
+    let seconds = 0;
+    while (thrown.vx !== 0 && seconds < 5) {
+      integrate(thrown, 1 / 60);
+      seconds += 1 / 60;
+    }
+    expect(seconds).toBeLessThan(0.5);
+    expect(thrown.x - 100).toBeLessThan(40);
+  });
+
   it("leaves a held body where the pointer put it", () => {
     const held = body({ vx: 900, held: true });
     integrate(held, 1);

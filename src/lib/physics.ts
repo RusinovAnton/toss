@@ -32,13 +32,20 @@ export interface Impulse {
   y: number;
 }
 
-/** Speed left after a second of drifting. Low enough to settle, not stop dead. */
-const DAMPING_PER_SECOND = 0.08;
+/**
+ * Speed left after a second of drifting.
+ *
+ * Small on purpose: a circle comes to rest within about half a second of
+ * being let go, after 30 to 130px depending on how hard it was thrown. At
+ * 0.08 it kept gliding, which made the radar feel like ice rather than a
+ * desk.
+ */
+const DAMPING_PER_SECOND = 0.001;
 /** How much speed survives a bounce. Walls eat more than circles do. */
 const WALL_RESTITUTION = 0.6;
 const BODY_RESTITUTION = 0.8;
 /** Below this a circle is treated as parked, which is what lets the loop idle. */
-export const REST_SPEED = 4;
+export const REST_SPEED = 12;
 /** A throw faster than this would tunnel through things in one frame. */
 const MAX_SPEED = 2600;
 /** Longest step taken at once; a slow frame is cut into several of these. */

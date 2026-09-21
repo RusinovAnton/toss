@@ -22,10 +22,10 @@ const VELOCITY_MEMORY = 0.06;
  * How much of the pointer's speed a circle keeps once it is let go.
  *
  * At full speed a flick sent a circle across the window and back, which made
- * the radar hard to aim at. A third of it still reads as a throw and settles
- * in a fraction of the distance.
+ * the radar hard to aim at. A fifth of it still reads as a throw and lands
+ * within a circle's width or two of where the pointer let go.
  */
-const THROW_SCALE = 1 / 3;
+const THROW_SCALE = 1 / 5;
 
 export interface Point {
   x: number;

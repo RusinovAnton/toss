@@ -205,3 +205,30 @@ body.unfocused .pulse {
 .card-up {
   animation: toss-card-up 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+/* A notice rises, holds, and fades. The hold is most of it, so the two ends
+   read as movement rather than as a slow blink. */
+@keyframes toss-notice {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  8% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  80% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(0);
+  }
+}
+
+.notice {
+  animation-name: toss-notice;
+  animation-timing-function: ease;
+  animation-fill-mode: both;
+}

@@ -311,9 +311,10 @@ every `PULSE_SECONDS / 3`.
   paired one, and blinking amber while a transfer runs. A trusted device also wears a small blue
   shield, a paired one a green link, on the circle's top-left edge.
 - **The circles are yours to throw.** Grab one and it follows the pointer; let go and it keeps a
-  third of the speed, slows down, bounces off the window edges and knocks the others out of the
-  way. A full-speed throw crossed the window and back, which made the radar hard to aim at. The centre
-  never moves, but a knock leans it a few pixels and it springs back. A press that travels more
+  fifth of the speed, stops within about half a second, bounces off the window edges and knocks the
+  others out of the way. A full-speed throw crossed the window and back, and even a fifth of it
+  glided for too long, so the damping is heavy: a flick travels a circle's width or two, not the
+  width of the radar. The centre never moves, but a knock leans it a few pixels and it springs back. A press that travels more
   than 5px is a throw rather than a click, so a throw never opens the picker. The loop stops
   itself once everything is still, so a quiet radar costs no frames.
 - **The centre circle does nothing on click.** Every action is aimed at another device, so the
@@ -324,7 +325,11 @@ every `PULSE_SECONDS / 3`.
 - **Receiving**: a card slides up from the bottom. Enter accepts, Escape denies, and the receiver
   declines by itself after a minute. Quick Save skips the card. When it lands, the card offers
   "Show" to reveal the files in Finder. Clipboard text from a paired device shows nothing at all:
-  it saves no file, so the card would be claiming something that did not happen.
+  it saves no file, so the card would be claiming something that did not happen. A line at the
+  foot of the window says who it came from, and nothing leaves the app: a system notification for
+  every copy would be unbearable.
+- **Notices** are one line at the foot of the window. They fade out after four seconds, and each
+  one carries an id so the same words twice replay the animation rather than sitting still.
 - **Settings** live behind the gear: name, PIN, shared clipboard, start at login, and the build's
   version at the foot. There is no Rescan button: the radar sweeps the subnet every minute and
   drops a device 30s after it stops answering, so a departure clears itself. The menu on a circle

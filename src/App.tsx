@@ -33,6 +33,7 @@ import {
   onDevicesChanged,
   onIncomingRequest,
   onSessionFinished,
+  onTextReceived,
   onTransferProgress,
   respondToRequest,
   sendFiles,
@@ -53,6 +54,11 @@ const ERROR_MS = 2600;
 /** The receiver declines by itself after a minute; the card follows suit. */
 const REQUEST_TIMEOUT_MS = 60_000;
 const SAVED_NOTICE_MS = 5000;
+/** How long a line at the foot of the window stays before it fades out. */
+const NOTICE_MS = 4000;
+
+/** Gives each notice its own identity, so repeats replay the animation. */
+let noticeCounter = 0;
 
 const REASONS: Record<string, string> = {
   declined: "Declined",
@@ -87,7 +93,11 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(() => previewFlag("settings"));
   const [trusted, setTrusted] = useState<TrustedDevice[]>([]);
   const [menu, setMenu] = useState<{ device: Device; x: number; y: number } | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; id: number } | null>(null);
+  /** Says something at the foot of the window. It fades on its own. */
+  const say = useCallback((text: string) => {
+    setNotice({ text, id: noticeCounter++ });
+  }, []);
   /// Ticked on the card: accept, and stop asking about this device.
   const [trustSender, setTrustSender] = useState(false);
 
@@ -175,6 +185,11 @@ export default function App() {
 
     const unlisteners = [
       onDevicesChanged(setDevices),
+      onTextReceived((received) => {
+        // In the window only. Rust has already put the text on the clipboard,
+        // and a system notification for every copy would be unbearable.
+        say(`Copied from ${received.alias ?? "a paired device"}`);
+      }),
       onIncomingRequest((request) => {
         setIncoming(request);
         setTrustSender(false);
@@ -323,6 +338,14 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [incoming]);
 
+  // A line at the foot of the window used to stay until something replaced
+  // it, so the radar slowly filled with stale news.
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   useEffect(() => {
     if (!saved || isPreview()) return;
     const timer = window.setTimeout(() => setSaved(null), SAVED_NOTICE_MS);
@@ -334,9 +357,9 @@ export default function App() {
     try {
       await trustDevice(device.fingerprint);
       setTrusted(await listTrusted());
-      setNotice(`${device.alias} no longer asks`);
+      say(`${device.alias} no longer asks`);
     } catch (error) {
-      setNotice(String(error));
+      say(String(error));
     }
   }
 
@@ -345,11 +368,11 @@ export default function App() {
     try {
       await pairDevice(device.fingerprint, paired);
       setTrusted(await listTrusted());
-      setNotice(
+      say(
         paired ? `Sharing the clipboard with ${device.alias}` : `Clipboard off for ${device.alias}`,
       );
     } catch (error) {
-      setNotice(String(error));
+      say(String(error));
     }
   }
 
@@ -357,7 +380,7 @@ export default function App() {
     setMenu(null);
     await forgetDevice(device.fingerprint).catch(console.error);
     setTrusted(await listTrusted().catch(() => []));
-    setNotice(`Forgot ${device.alias}`);
+    say(`Forgot ${device.alias}`);
   }
 
   async function pushClipboard(device: Device) {
@@ -367,7 +390,7 @@ export default function App() {
       await sendClipboard(device.fingerprint);
       setTransfer(device.fingerprint, { phase: "done", progress: 1 });
       clearTransferLater(device.fingerprint, FLASH_MS);
-      setNotice(`Clipboard sent to ${device.alias}`);
+      say(`Clipboard sent to ${device.alias}`);
     } catch (error) {
       const failure = error as { code?: string; message?: string };
       setTransfer(device.fingerprint, {
@@ -376,7 +399,7 @@ export default function App() {
         message: REASONS[failure.code ?? ""] ?? "Failed",
       });
       clearTransferLater(device.fingerprint, ERROR_MS);
-      if (failure.code === "empty-clipboard") setNotice("The clipboard is empty");
+      if (failure.code === "empty-clipboard") say("The clipboard is empty");
     }
   }
 
@@ -401,7 +424,7 @@ export default function App() {
       // A picker that refuses to open used to fail in complete silence, which
       // looks exactly like a click that did nothing.
       console.error("file picker failed", error);
-      setNotice(`Could not open the picker: ${error}`);
+      say(`Could not open the picker: ${error}`);
       return;
     }
     if (!picked) return;
@@ -471,10 +494,11 @@ export default function App() {
 
       {notice && (
         <p
-          className="absolute inset-x-0 bottom-3 text-center text-[11px]"
-          style={{ color: "var(--muted)" }}
+          key={notice.id}
+          className="notice absolute inset-x-0 bottom-3 text-center text-[11px]"
+          style={{ color: "var(--muted)", animationDuration: `${NOTICE_MS}ms` }}
         >
-          {notice}
+          {notice.text}
         </p>
       )}
 
