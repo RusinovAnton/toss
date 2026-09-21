@@ -39,7 +39,19 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-cd "$(git rev-parse --show-toplevel)"
+# The repository this script lives in, not whatever directory it was run
+# from: on the PATH as a symlink, `draft_release` should mean this project
+# wherever you happen to be standing.
+self=${BASH_SOURCE[0]}
+while [ -L "$self" ]; do
+  here=$(cd -P "$(dirname "$self")" && pwd)
+  self=$(readlink "$self")
+  case $self in
+    /*) ;;
+    *) self=$here/$self ;;
+  esac
+done
+cd "$(git -C "$(cd -P "$(dirname "$self")" && pwd)" rev-parse --show-toplevel)"
 
 # Whatever the remote calls its default branch, rather than assuming main.
 branch=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)
