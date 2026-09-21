@@ -65,6 +65,8 @@ cd src-tauri && cargo test         # Rust unit tests
 - `src/lib/physics.ts` — the circles' inertia, collisions and the centre's wobble; unit-tested
 - `src/hooks/useRadarPhysics.ts` — the loop that runs them, and the pointer drag
 - `src/lib/device.ts` — device emoji and OS guessing; unit-tested
+- `src/lib/drop.ts` — turning a drag-drop point into CSS pixels; unit-tested
+- `src/lib/menu.ts` — keeping the circle menu inside the window; unit-tested
 - `src/lib/preview.ts` — dev-only sample data, see Previewing the UI below
 - `src/components/` — the radar: circles, pulses, cards, settings
 - `src-tauri/src/lib.rs` — Tauri builder, `AppState`, command registration
@@ -258,8 +260,8 @@ than the frontend, which is both where the loop lives and why the webview needs
 no clipboard permission at all.
 
 In the UI: right-click a circle to pair, unpair or push the clipboard by hand.
-A paired device wears a solid ring. With one device paired, Cmd/Ctrl+Shift+V
-sends the clipboard without the menu.
+A paired device wears a green ring and a link badge. With one device paired,
+Cmd/Ctrl+Shift+V sends the clipboard without the menu.
 
 ## The radar
 
@@ -271,8 +273,18 @@ the window is in the background.
   hover, and the drop starts the transfer with no confirmation. Clicking a circle opens a file
   picker aimed at that device; right-click for a folder picker or the clipboard. Dropping on empty
   space shakes the centre.
-- **The circles are yours to throw.** Grab one and it follows the pointer; let go and it keeps the
-  speed, slows down, bounces off the window edges and knocks the others out of the way. The centre
+  **Where a drop landed is not the same unit on every platform.** wry fills Tauri's
+  `PhysicalPosition` from `draggingLocation` on macOS and the GTK drop controller on Linux, both
+  logical points, but from `ScreenToClient` on Windows, which is physical pixels. Nothing converts
+  them, so only Windows divides by the device pixel ratio (`src/lib/drop.ts`). Dividing everywhere
+  halved every coordinate on a Retina Mac: every drop missed, and drag and drop did nothing but
+  shake the centre.
+- **A ring says what the circle is.** Faint for a stranger, blue for a trusted device, green for a
+  paired one, and blinking amber while a transfer runs. A trusted device also wears a small blue
+  shield, a paired one a green link, on the circle's top-left edge.
+- **The circles are yours to throw.** Grab one and it follows the pointer; let go and it keeps a
+  third of the speed, slows down, bounces off the window edges and knocks the others out of the
+  way. A full-speed throw crossed the window and back, which made the radar hard to aim at. The centre
   never moves, but a knock leans it a few pixels and it springs back. A press that travels more
   than 5px is a throw rather than a click, so a throw never opens the picker. The loop stops
   itself once everything is still, so a quiet radar costs no frames.
@@ -285,9 +297,11 @@ the window is in the background.
   declines by itself after a minute. Quick Save skips the card. When it lands, the card offers
   "Show" to reveal the files in Finder. Clipboard text from a paired device shows nothing at all:
   it saves no file, so the card would be claiming something that did not happen.
-- **Settings** live behind the gear: name, PIN, Quick Save, a rescan, and the build's version at the foot. The rescan empties the
-  radar first, so a device that has already left goes now rather than a minute later; the menu on
-  a circle names its address, which is the only way to tell two similar circles apart.
+- **Settings** live behind the gear: name, PIN, shared clipboard, start at login, and the build's
+  version at the foot. There is no Rescan button: the radar sweeps the subnet every minute and
+  drops a device 30s after it stops answering, so a departure clears itself. The menu on a circle
+  names its address, which is the only way to tell two similar circles apart, and it flips above
+  the circle rather than off the bottom of the window (`src/lib/menu.ts`).
 - The window is always square, at least 360px, and remembers where it was. Geometry is written at
   most every two seconds while dragging, so a crash still leaves a recent position behind.
 
@@ -318,7 +332,7 @@ This only happens in a dev build outside Tauri, so the packaged app never shows 
 |---|---|---|---|
 | `get_identity` | — | `{ alias, fingerprint, deviceModel, deviceType, port, appVersion }` | Loaded once in `setup` from `identity.json` in the app-data dir. `appVersion` is `CARGO_PKG_VERSION`, baked in at build time, and shows at the foot of the settings popover |
 | `list_devices` | — | `Device[]` | Current peers. Snapshot; the event is the live feed |
-| `rescan` | — | `Device[]` | Empties the list, then announce burst + `/24` scan. Resolves when the scan finishes (a few seconds) |
+| `rescan` | — | `Device[]` | Empties the list, then announce burst + `/24` scan. Resolves when the scan finishes (a few seconds). Nothing in the UI calls it; the discovery loops keep the radar current by themselves |
 | `respond_to_request` | `sessionId`, `acceptedFileIds`, `trustSender?` | — | Answers an `incoming-request`. An empty list declines; `trustSender` also trusts the device |
 | `get_settings` | — | `{ pin, quickSave }` | |
 | `set_settings` | `settings` | `Settings` | Persists and applies immediately; the server reads the live value |
@@ -379,7 +393,9 @@ Facts verified against the protocol repo and official app source (`packages/core
 - **Announce burst**: the official app repeats each announce after 100ms, 500ms and 2000ms,
   because a single datagram is easily lost. We copy those delays.
 - The official app does *not* re-announce on a timer, so a peer that stays quiet would age out
-  of our 60s window. We re-probe known peers every 20s to keep them alive.
+  of our 30s window. We re-probe known peers every 10s to keep them alive, which is also what
+  makes a peer that has left disappear within 30s. The `/24` scan runs at startup and then every
+  minute, so a peer on a network that blocks multicast is found without anyone asking.
 - Register requests carry the client certificate; the official server offers client auth and can
   require it. Our HTTP client always presents ours.
 - Peers use self-signed certificates, so certificate verification is off by design on our client.

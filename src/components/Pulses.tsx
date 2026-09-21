@@ -1,4 +1,4 @@
-import { CENTER_DIAMETER, pulseScale } from "../lib/radar";
+import { CENTER_DIAMETER, PULSE_SECONDS, pulseScale } from "../lib/radar";
 
 /**
  * Three rings leaving the centre circle, staggered so one is always on its
@@ -8,17 +8,20 @@ export function Pulses({ size }: { size: number }) {
   return (
     <svg
       className="pointer-events-none absolute inset-0 h-full w-full"
-      style={{ ["--pulse-scale" as string]: pulseScale(size) }}
+      style={{
+        ["--pulse-scale" as string]: pulseScale(size),
+        ["--pulse-duration" as string]: `${PULSE_SECONDS}s`,
+      }}
       aria-hidden
     >
-      {[0, 0.8, 1.6].map((delay) => (
+      {[0, 1, 2].map((step) => (
         <circle
-          key={delay}
+          key={step}
           cx="50%"
           cy="50%"
           r={CENTER_DIAMETER / 2}
           className="pulse"
-          style={{ animationDelay: `${delay}s` }}
+          style={{ animationDelay: `${(step * PULSE_SECONDS) / 3}s` }}
         />
       ))}
     </svg>

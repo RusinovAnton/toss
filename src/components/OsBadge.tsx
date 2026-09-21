@@ -30,9 +30,12 @@ function Glyph({ os }: { os: OsKind }) {
         </svg>
       );
     case "windows":
+      // Four square panes, the Windows 11 mark, rather than the older
+      // perspective flag: its slanted edges and uneven panes turn to mush at
+      // 10px, and the two lower ones did not even meet in the middle.
       return (
         <svg {...common}>
-          <path d="M3 4.6l8-1.1v8.1H3V4.6zm0 9.9h8v8.1l-8-1.1v-7zm9.8-11.2L22 2v9.6h-9.2V3.3zm0 11.2H22V22l-9.2-1.3v-6.2z" />
+          <path d="M3 3h8.5v8.5H3zm9.5 0H21v8.5h-8.5zM3 12.5h8.5V21H3zm9.5 0H21V21h-8.5z" />
         </svg>
       );
     case "linux":

@@ -2,6 +2,7 @@ import { deviceEmoji, osFromModel } from "../lib/device";
 import { DEVICE_DIAMETER } from "../lib/radar";
 import type { Device } from "../lib/tauri";
 import { OsBadge } from "./OsBadge";
+import { TrustBadge } from "./TrustBadge";
 
 /** What the ring around a circle is saying right now. */
 export type TransferPhase = "idle" | "active" | "done" | "error";
@@ -49,6 +50,19 @@ export function DeviceCircle({
   const active = transfer.phase === "active";
   const percentage = Math.round(transfer.progress * 100);
 
+  // What the ring says, most urgent first: a transfer in flight blinks amber,
+  // a circle being dragged onto lights up, and otherwise the ring carries the
+  // standing relationship — green paired, blue trusted, faint for a stranger.
+  const stroke = active
+    ? "var(--busy)"
+    : hovered
+      ? "var(--accent)"
+      : paired
+        ? "var(--linked)"
+        : trusted
+          ? "var(--accent)"
+          : "var(--ring)";
+
   return (
     <button
       type="button"
@@ -70,7 +84,9 @@ export function DeviceCircle({
         // Or the browser starts its own drag and the pointer events stop.
         touchAction: "none",
       }}
-      title={`${device.alias} at ${device.ip} — click to send files, drop them here, or drag it around`}
+      title={`${device.alias} at ${device.ip}${
+        paired ? " — paired, clipboard shared" : trusted ? " — trusted" : ""
+      } — click to send files, drop them here, or drag it around`}
     >
       <span
         className="relative flex items-center justify-center rounded-full"
@@ -87,30 +103,23 @@ export function DeviceCircle({
           height={ARC_BOX}
           viewBox={`0 0 ${ARC_BOX} ${ARC_BOX}`}
         >
-          {/* The resting ring, or the solid blue one while dragging. */}
+          {/* The resting ring, which is also where trust and progress show. */}
           <circle
             cx={ARC_BOX / 2}
             cy={ARC_BOX / 2}
             r={ARC_RADIUS}
             fill="none"
-            strokeWidth={hovered || paired ? 2 : trusted ? 1.5 : 1}
+            strokeWidth={active || hovered || paired ? 2 : trusted ? 1.5 : 1}
             className={
-              transfer.phase === "done"
-                ? "flash-ok"
-                : transfer.phase === "error"
-                  ? "flash-bad"
-                  : undefined
+              active
+                ? "ring-busy"
+                : transfer.phase === "done"
+                  ? "flash-ok"
+                  : transfer.phase === "error"
+                    ? "flash-bad"
+                    : undefined
             }
-            style={{
-              // A paired device wears a solid ring, so pairing is visible
-              // without opening anything.
-              // A trusted device wears a faint accent ring, a paired one a
-              // solid one, so the two levels are visible at a glance.
-              stroke:
-                hovered || paired || trusted ? "var(--accent)" : "var(--ring)",
-              opacity: !hovered && trusted && !paired ? 0.45 : paired && !hovered ? 0.8 : 1,
-              transition: "stroke 150ms ease",
-            }}
+            style={{ stroke, transition: "stroke 150ms ease" }}
           />
           {/* The progress arc, filling clockwise from twelve o'clock. */}
           {active && (
@@ -119,7 +128,7 @@ export function DeviceCircle({
               cy={ARC_BOX / 2}
               r={ARC_RADIUS}
               fill="none"
-              stroke="var(--accent)"
+              stroke="var(--busy)"
               strokeWidth={2}
               strokeLinecap="round"
               strokeDasharray={CIRCUMFERENCE}
@@ -131,6 +140,7 @@ export function DeviceCircle({
         </svg>
         <span className="text-2xl leading-none">{deviceEmoji(device.deviceType)}</span>
         <OsBadge os={osFromModel(device.deviceModel)} />
+        <TrustBadge trusted={trusted} paired={paired} />
       </span>
 
       <span

@@ -60,6 +60,14 @@ export function placeDevices(count: number, size: number): Placement[] {
   return placements;
 }
 
+/**
+ * How long one pulse ring takes to cross the window.
+ *
+ * The CSS reads it as `--pulse-duration` and the three rings are spaced a
+ * third of it apart, so one is always on its way out.
+ */
+export const PULSE_SECONDS = 4;
+
 /** How far the pulse rings grow: from the centre circle's edge to the corner. */
 export function pulseScale(size: number): number {
   return size / 2 / (CENTER_DIAMETER / 2);

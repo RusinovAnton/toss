@@ -18,6 +18,14 @@ const CENTRE_RADIUS = CENTER_DIAMETER / 2 + 4;
 const DRAG_SLOP = 5;
 /** A throw takes its speed from the last few moves, not the whole drag. */
 const VELOCITY_MEMORY = 0.06;
+/**
+ * How much of the pointer's speed a circle keeps once it is let go.
+ *
+ * At full speed a flick sent a circle across the window and back, which made
+ * the radar hard to aim at. A third of it still reads as a throw and settles
+ * in a fraction of the distance.
+ */
+const THROW_SCALE = 1 / 3;
 
 export interface Point {
   x: number;
@@ -171,6 +179,9 @@ export function useRadarPhysics(devices: Device[], size: number) {
         if (performance.now() - lastTime > 120) {
           body.vx = 0;
           body.vy = 0;
+        } else {
+          body.vx *= THROW_SCALE;
+          body.vy *= THROW_SCALE;
         }
         if (ended.type === "pointercancel") draggedRef.current = false;
         wake();

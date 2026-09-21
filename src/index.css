@@ -10,6 +10,11 @@
   --accent: #3b82f6;
   --ok: #22c55e;
   --bad: #ef4444;
+  /* A paired device's ring: green, because the clipboard flows to it. */
+  --linked: #22c55e;
+  /* A transfer in flight. Amber rather than the accent, so a busy circle is
+     not mistaken for a trusted one. */
+  --busy: #f59e0b;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -81,8 +86,9 @@ input {
   transform-origin: center;
   /* `backwards` keeps a ring at its starting opacity during its delay,
      instead of the full-strength base style, which read as a hard ring
-     sitting on the circle for the first cycle. */
-  animation: toss-wave 2.4s linear infinite backwards;
+     sitting on the circle for the first cycle. The duration comes from
+     `PULSE_SECONDS`, which also spaces the three rings out. */
+  animation: toss-wave var(--pulse-duration, 4s) linear infinite backwards;
 }
 
 /* Cheap when the window is in the background, and less distracting. */
@@ -158,6 +164,22 @@ body.unfocused .pulse {
   70% {
     stroke: var(--bad);
   }
+}
+
+/* A transfer in flight. The ring blinks rather than filling, so progress is
+   visible from the corner of an eye even before the arc means much. */
+@keyframes toss-busy {
+  0%,
+  100% {
+    stroke: var(--busy);
+  }
+  50% {
+    stroke: var(--ring);
+  }
+}
+
+.ring-busy {
+  animation: toss-busy 900ms ease-in-out infinite;
 }
 
 .flash-ok {
