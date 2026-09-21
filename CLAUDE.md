@@ -129,8 +129,30 @@ reads its version from `package.json`. Bundle names therefore always match the
 release. The version committed in the repository only matters for local
 builds, so it lags between releases; run the script to move it on.
 
-Nothing is code-signed. Both systems warn on first launch; the release notes in
-the workflow tell users what to click.
+**Signing.** macOS builds are signed with codesign's ad-hoc identity (`-`),
+which is a signature with no certificate behind it. It makes the bundle
+internally consistent but tells Gatekeeper nothing, so a downloaded release
+still opens as "Toss is damaged and can't be opened" — that is the quarantine
+flag on an app Apple cannot check, not a broken image. `xattr -dr
+com.apple.quarantine /Applications/Toss.app`, or Privacy & Security → Open
+Anyway, clears it per install. Windows is not signed at all.
+
+**Notarisation is the only real fix**, and the workflow is already wired for
+it: set these repository secrets and the macOS jobs switch from the ad-hoc
+build to a signed, notarised one, with release notes to match.
+
+| Secret | What it is |
+|---|---|
+| `APPLE_CERTIFICATE` | Developer ID Application `.p12`, base64 encoded |
+| `APPLE_CERTIFICATE_PASSWORD` | Password of that `.p12` |
+| `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Name (TEAMID)` |
+| `APPLE_ID` | The Apple account email |
+| `APPLE_APP_PASSWORD` | An app-specific password, not the account one |
+| `APPLE_TEAM_ID` | The 10-character team id |
+
+It needs the Apple Developer Program, which is paid. Until both
+`APPLE_CERTIFICATE` and `APPLE_ID` exist, the unsigned path runs and nothing
+in CI changes.
 
 ## Packaging
 

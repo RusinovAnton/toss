@@ -52,17 +52,24 @@ yet, so both systems will want a word with you the first time.
 
 ### macOS
 
-Open the `.dmg` and drag Toss to Applications. The build is signed ad-hoc
-rather than notarised, so macOS wants a word first.
+Open the `.dmg` and drag Toss to Applications.
 
-If the first launch says **"Toss is damaged and can't be opened"**, that is the
-quarantine flag your browser put on the download, not a broken file. Clear it:
+Releases are signed ad-hoc rather than notarised by Apple, so the first launch
+says **"Toss is damaged and can't be opened"**. Nothing is wrong with the
+download: that is the quarantine flag your browser set, and macOS words it that
+way for any app it cannot check with Apple. Two ways past it:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Toss.app
 ```
 
-Then open it normally. On older macOS a right click, then **Open**, is enough.
+or try to open it, then go to **System Settings → Privacy & Security** and
+press **Open Anyway**. Either one is needed once per install, so a new release
+asks again. On macOS 14 and older, a right click then **Open** also works.
+
+Only notarisation removes the warning for good, and that needs a paid Apple
+Developer ID. The release workflow is ready for one: add the `APPLE_*` secrets
+listed in `CLAUDE.md` and every build from then on is signed and notarised.
 
 ### Windows
 

@@ -104,6 +104,39 @@ jobs:
             signing: ""
 
     runs-on: ${{ matrix.platform }}
+    env:
+      # Set once here because the `secrets` context cannot be read from a
+      # step's `if` directly.
+      HAS_APPLE_ID: ${{ secrets.APPLE_ID != '' && secrets.APPLE_CERTIFICATE != '' }}
+      NOTARISED_BODY: |
+        **macOS**: open the `.dmg` and drag Toss to Applications. Signed and
+        notarised, so it opens without a warning. Apple silicon is the
+        `aarch64` image, Intel is the `x64` one.
+
+        **Windows**: run the `.msi`. SmartScreen warns about an unknown
+        publisher: choose More info, then Run anyway. Allow Toss through the
+        firewall on private networks when asked, or no other device can reach
+        it.
+      UNSIGNED_BODY: |
+        This build is signed ad-hoc rather than notarised by Apple, so macOS
+        asks about it. Nothing on Windows is signed either.
+
+        **macOS**: open the `.dmg`, drag Toss to Applications, then clear the
+        quarantine flag your browser set, which is what "Toss is damaged"
+        means:
+
+        ```
+        xattr -dr com.apple.quarantine /Applications/Toss.app
+        ```
+
+        Or open **System Settings → Privacy & Security** and press **Open
+        Anyway** after the first attempt. Apple silicon is the `aarch64`
+        image, Intel is the `x64` one.
+
+        **Windows**: run the `.msi`. SmartScreen warns about an unknown
+        publisher: choose More info, then Run anyway. Allow Toss through the
+        firewall on private networks when asked, or no other device can reach
+        it.
     steps:
       - uses: actions/checkout@v4
 
@@ -130,7 +163,33 @@ jobs:
         shell: bash
         run: node scripts/set-version.mjs "${{ needs.version.outputs.version }}"
 
-      - uses: tauri-apps/tauri-action@v0
+      # Two builds of the same thing, and only one ever runs. Splitting them
+      # is the only way to leave the Apple variables unset: an empty
+      # APPLE_ID is still a set APPLE_ID, and the bundler would try to
+      # notarise with no credentials and fail the release.
+      - name: Build, sign with Developer ID and notarise
+        if: runner.os == 'macOS' && env.HAS_APPLE_ID == 'true'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI: true
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: v${{ needs.version.outputs.version }}
+          releaseName: Toss v${{ needs.version.outputs.version }}
+          releaseBody: ${{ env.NOTARISED_BODY }}
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      - name: Build
+        if: runner.os != 'macOS' || env.HAS_APPLE_ID != 'true'
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The macOS bundler drives Finder over AppleScript to lay out the
@@ -141,17 +200,7 @@ jobs:
         with:
           tagName: v${{ needs.version.outputs.version }}
           releaseName: Toss v${{ needs.version.outputs.version }}
-          releaseBody: |
-            Nothing here is code-signed yet.
-
-            **macOS**: open the `.dmg`, drag Toss to Applications, then
-            right-click it and choose Open the first time. Apple silicon is the
-            `aarch64` image, Intel is the `x64` one.
-
-            **Windows**: run the `.msi`. SmartScreen will warn about an
-            unknown publisher: choose More info, then Run anyway. Allow Toss
-            through the firewall on private networks when asked, or no other
-            device can reach it.
+          releaseBody: ${{ env.UNSIGNED_BODY }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
