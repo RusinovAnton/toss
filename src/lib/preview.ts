@@ -48,6 +48,7 @@ export const PREVIEW_IDENTITY: IdentityInfo = {
   deviceModel: "macOS",
   deviceType: "desktop",
   port: 53317,
+  appVersion: "dev",
 };
 
 export const PREVIEW_DEVICES: Device[] = [

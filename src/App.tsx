@@ -496,6 +496,7 @@ export default function App() {
         <SettingsPanel
           open={settingsOpen}
           alias={identity?.alias ?? ""}
+          version={identity?.appVersion ?? ""}
           settings={settings}
           onToggle={() => setSettingsOpen((open) => !open)}
           onAlias={(alias) => {

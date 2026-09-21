@@ -5,6 +5,7 @@ import type { Settings } from "../lib/tauri";
 export function SettingsPanel({
   open,
   alias,
+  version,
   settings,
   onToggle,
   onAlias,
@@ -14,6 +15,8 @@ export function SettingsPanel({
 }: {
   open: boolean;
   alias: string;
+  /** The running build, shown at the foot of the popover. */
+  version: string;
   settings: Settings;
   onToggle: () => void;
   onAlias: (alias: string) => void;
@@ -131,6 +134,15 @@ export function SettingsPanel({
             Empties the radar and finds everyone again, which clears a device
             that has already left.
           </p>
+
+          {version && (
+            <p
+              className="mt-3 text-center text-[10px] tabular-nums"
+              style={{ color: "var(--muted)", opacity: 0.7 }}
+            >
+              Toss {version}
+            </p>
+          )}
         </div>
       )}
     </>

@@ -77,6 +77,11 @@ pub struct IdentityInfo {
     pub device_model: String,
     pub device_type: DeviceType,
     pub port: u16,
+    /// The build's own version, so the app can say which one it is. Baked in
+    /// at compile time, which is when CI has just written the release number
+    /// into `Cargo.toml`; a local build therefore shows whatever the
+    /// repository says, which lags between releases.
+    pub app_version: String,
 }
 
 impl Identity {
@@ -162,6 +167,7 @@ impl Identity {
             device_model: device_model().to_string(),
             device_type: DeviceType::Desktop,
             port: DEFAULT_PORT,
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
 

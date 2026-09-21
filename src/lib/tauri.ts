@@ -11,6 +11,8 @@ export interface IdentityInfo {
   deviceModel: string;
   deviceType: DeviceType;
   port: number;
+  /** The running build's version, e.g. `0.1.7`. */
+  appVersion: string;
 }
 
 export interface Device {
