@@ -95,11 +95,12 @@ the formats of the machine it runs on, so Windows installers come from a
 Windows machine or from CI. Tagging a commit does that for you:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+scripts/draft_release          # or --minor, or --major
 ```
 
-That builds macOS and Windows and leaves a draft release with the installers
-attached.
+It pulls the default branch, works out the next version from the newest tag
+and asks before pushing it. That builds macOS and Windows and leaves a draft
+release with the installers attached.
 
 ## How it relates to LocalSend
 

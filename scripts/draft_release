@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+#
+# Cuts a release: pulls the default branch, works out the next version from
+# the newest tag, asks, then tags and pushes. The push starts the release
+# workflow, which builds the installers and leaves a draft release.
+#
+#   draft_release              # 0.1.8 -> 0.1.9
+#   draft_release --minor      # 0.1.8 -> 0.2.0
+#   draft_release --major      # 0.1.8 -> 1.0.0
+#   draft_release --yes        # no question, for scripts
+#   draft_release --dry-run    # say what it would do and stop
+#
+# Nothing here writes a version into a file: the workflow reads it from the
+# tag and writes the manifests itself (see scripts/set-version.mjs).
+set -euo pipefail
+
+part=patch
+assume_yes=false
+dry_run=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --major) part=major ;;
+    --minor) part=minor ;;
+    --patch) part=patch ;;
+    -y | --yes) assume_yes=true ;;
+    -n | --dry-run) dry_run=true ;;
+    -h | --help)
+      sed -n '3,15p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "draft_release: unknown argument $1" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Whatever the remote calls its default branch, rather than assuming main.
+branch=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)
+branch=${branch:-main}
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "draft_release: the working tree has changes. A tag would not include them." >&2
+  exit 1
+fi
+
+current=$(git rev-parse --abbrev-ref HEAD)
+if [ "$current" != "$branch" ]; then
+  echo "On $current, switching to $branch."
+  git checkout --quiet "$branch"
+fi
+
+git fetch --quiet --tags --force origin "$branch"
+git merge --quiet --ff-only "origin/$branch"
+
+# Newest tag by version order. sed rather than head: head closing the pipe
+# early can kill git first, which `set -o pipefail` would treat as failure.
+latest=$(git tag -l 'v*' --sort=-v:refname | sed -n 1p)
+base=${latest#v}
+base=${base:-0.0.0}
+IFS=. read -r major minor patch <<<"$base"
+
+case "$part" in
+  major)
+    major=$((major + 1))
+    minor=0
+    patch=0
+    ;;
+  minor)
+    minor=$((minor + 1))
+    patch=0
+    ;;
+  patch) patch=$((patch + 1)) ;;
+esac
+
+next="v$major.$minor.$patch"
+commit=$(git rev-parse --short HEAD)
+subject=$(git log -1 --pretty=%s)
+
+if git rev-parse --quiet --verify "refs/tags/$next" >/dev/null; then
+  echo "draft_release: $next already exists." >&2
+  exit 1
+fi
+
+echo "${latest:-no tags yet} -> $next on $branch at $commit: $subject"
+
+if [ "$dry_run" = true ]; then
+  echo "Dry run, nothing pushed."
+  exit 0
+fi
+
+if [ "$assume_yes" != true ]; then
+  if [ ! -t 0 ]; then
+    echo "draft_release: nothing to read an answer from. Pass --yes." >&2
+    exit 1
+  fi
+  printf 'Push the next tag version %s? [Y/n] ' "$next"
+  read -r answer
+  case "${answer:-y}" in
+    y | Y | yes | Yes) ;;
+    *)
+      echo "Nothing pushed."
+      exit 1
+      ;;
+  esac
+fi
+
+git tag "$next"
+if ! git push --quiet origin "refs/tags/$next"; then
+  # A tag left behind locally would block the next run with "already exists".
+  git tag -d "$next" >/dev/null
+  echo "draft_release: the push failed, so $next was not created." >&2
+  exit 1
+fi
+
+remote=$(git remote get-url origin | sed -e 's#^git@github.com:#https://github.com/#' -e 's#\.git$##')
+echo "Pushed $next. The build is at $remote/actions, and it leaves a draft release."

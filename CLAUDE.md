@@ -68,6 +68,8 @@ cd src-tauri && cargo test         # Rust unit tests
 - `src/lib/drop.ts` — turning a drag-drop point into CSS pixels; unit-tested
 - `src/lib/menu.ts` — keeping the circle menu inside the window; unit-tested
 - `src/lib/preview.ts` — dev-only sample data, see Previewing the UI below
+- `scripts/draft_release` — tags the default branch and pushes, which cuts a release
+- `scripts/set-version.mjs` — writes a version into the manifests; the release job runs it
 - `src/components/` — the radar: circles, pulses, cards, settings
 - `src-tauri/src/lib.rs` — Tauri builder, `AppState`, command registration
 - `src-tauri/src/identity.rs` — alias, rcgen cert, fingerprint, `identity.json` persistence
@@ -115,10 +117,23 @@ Intel) and Windows on a `v*` tag, and leaves a **draft** release with them
 attached, so nothing goes public without a look first:
 
 ```bash
-git tag v0.1.2 && git push origin v0.1.2
+scripts/draft_release            # 0.1.8 -> 0.1.9
+scripts/draft_release --minor    # 0.1.8 -> 0.2.0
+scripts/draft_release --major    # 0.1.8 -> 1.0.0
 ```
 
-Or run the workflow from the Actions tab: a blank version bumps the patch
+It switches to the default branch, fast-forwards it, works out the next
+version from the newest tag, shows the commit it is about to tag and asks
+before pushing. `--yes` skips the question, `--dry-run` stops before the tag.
+A failed push deletes the local tag, so a retry does not trip over "already
+exists". Put it on the PATH once and it is a command anywhere:
+
+```bash
+ln -s "$PWD/scripts/draft_release" /usr/local/bin/draft_release
+```
+
+The plain `git tag v0.1.9 && git push origin v0.1.9` still works, and so does
+running the workflow from the Actions tab: a blank version bumps the patch
 number of the newest tag, and a draft's tag is only created when the draft is
 published.
 
